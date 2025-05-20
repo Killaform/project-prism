@@ -174,31 +174,60 @@ def score():
     POST body expects:
     {
       source_type: "...",
-      factcheck: { verdict: "True"/"False"/"Uncertain" },
+      factcheck: { verdict: "True"/"False"/"Uncertain" }, // Optional, can be missing or factcheck.verdict can be null/undefined
       slider: Number (0-100),
-      recency_boost: Number
+      recency_boost: Number (this is the boost value, not a boolean)
+    }
+    Returns:
+    {
+        "credibility_score": Number (0-100),
+        "breakdown": {
+            "base_trust": Number,
+            "fact_check_adjustment": Number,
+            "slider_influence": Number,
+            "recency_boost_value": Number
+        }
     }
     """
     if request.method=="OPTIONS":
         return jsonify({}),200
+    
     data = request.get_json(force=True)
+    if not data: # Ensure data is not None
+        return jsonify({"error": "Request body must be JSON and not empty"}), 400
+
     st       = data.get("source_type","other")
-    verdict  = data.get("factcheck",{}).get("verdict")
-    slider   = float(data.get("slider",50))
-    recency  = int(data.get("recency_boost",0))
+    # Handle potentially missing factcheck or verdict
+    factcheck_data = data.get("factcheck", {}) 
+    verdict = factcheck_data.get("verdict") if factcheck_data else None
 
-    base = BASE_TRUST.get(st,50)
-    if verdict=="True":
-        fc_adj = 10
-    elif verdict=="False":
-        fc_adj = -20
-    else:
-        fc_adj = 0
+    slider   = float(data.get("slider", 50)) # Default to 50 if not provided
+    recency_boost_value = int(data.get("recency_boost", 0)) # This is already the boost value
 
-    bias = (slider - 50) * 0.2
-    raw  = base + fc_adj + bias + recency
-    final = max(0, min(100, round(raw)))
-    return jsonify({"credibility_score": final})
+    base_trust = BASE_TRUST.get(st,50)
+    
+    fact_check_adjustment = 0
+    if verdict == "True":
+        fact_check_adjustment = 10
+    elif verdict == "False":
+        fact_check_adjustment = -20
+    # If verdict is "Uncertain" or missing, adjustment remains 0
+
+    # Slider influence: scales from -10 at slider=0 to +10 at slider=100
+    # Midpoint slider=50 means 0 influence.
+    slider_influence = (slider - 50) * 0.2 
+    
+    raw_score  = base_trust + fact_check_adjustment + slider_influence + recency_boost_value
+    final_score = max(0, min(100, round(raw_score)))
+    
+    breakdown = {
+        "base_trust": base_trust,
+        "fact_check_adjustment": fact_check_adjustment,
+        "slider_influence": round(slider_influence, 2), # round for cleaner display
+        "recency_boost_value": recency_boost_value
+    }
+    
+    return jsonify({"credibility_score": final_score, "breakdown": breakdown})
 
 if __name__=="__main__":
     app.run(debug=True)
