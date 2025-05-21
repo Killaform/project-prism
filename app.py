@@ -1,6 +1,6 @@
 import os
 import json
-import ast # Import ast for literal_eval
+import ast 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -88,16 +88,17 @@ def fetch_text_from_url(url):
         if not content_element: content_element = soup.body
         if content_element:
             text_chunks = []
+            # Using main_content_element (which should be content_element)
             for element in content_element.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'pre', 'blockquote'], recursive=True):
                 is_direct_child_of_main = False; parent = element.parent
                 while parent and parent != soup:
                     if parent == content_element: is_direct_child_of_main = True; break
                     if parent.name in ['body', 'html'] and parent != content_element: break 
                     parent = parent.parent
-                if is_direct_child_of_main or main_text_element.name in ['p', 'li']: # Corrected variable name
+                if is_direct_child_of_main or (content_element.name in ['p', 'li'] and element.parent == content_element):
                      chunk = element.get_text(separator=' ', strip=True)
                      if chunk and len(chunk.split()) > 3: text_chunks.append(chunk)
-            if not text_chunks: text = content_element.get_text(separator='\n', strip=True)
+            if not text_chunks and content_element: text = content_element.get_text(separator='\n', strip=True)
             else: text = "\n".join(text_chunks)
             text = '\n'.join([line.strip() for line in text.splitlines() if line.strip() and len(line.strip().split()) > 2]) 
             print(f"Extracted ~{len(text)} chars from {url}")
@@ -112,9 +113,13 @@ def classify_source_type(result_url, source_engine_name=None):
     try:
         parsed_url = urlparse(result_url); netloc = parsed_url.netloc.lower(); path = parsed_url.path.lower()
         if netloc.startswith("www."): netloc = netloc[4:]
-        if netloc.endswith((".gov", ".mil")): return "government"
+
+        # UPDATED Government Check
+        if netloc.endswith(".gov") or ".gov." in netloc or netloc.endswith(".mil") or ".mil." in netloc: # e.g. .gov.au, .gov.uk
+            return "government"
         if netloc.endswith(".edu"): return "academic_institution"
         if "wikipedia.org" in netloc: return "encyclopedia"
+        
         for domain in KNOWN_SOCIAL_MEDIA_PLATFORMS:
             if domain == netloc or netloc.endswith("." + domain) or domain in netloc:
                 if (domain == "youtube.com" or "youtube.com" in netloc or "youtu.be" in netloc) and \
@@ -151,12 +156,12 @@ def get_sentiment_and_bias(text_content):
         prompt = (
             f"Analyze sentiment and political bias of this text. For sentiment, classify 'positive', 'negative', or 'neutral', and score -1.0 to 1.0. "
             f"For bias, describe if it leans left, right, center, or neutral/objective. "
-            f"Return ONLY valid JSON: {{\"sentiment_label\":\"string\", \"sentiment_score\":float, \"bias_label\":\"string\"}}." # Explicitly escaped double quotes in prompt
+            f"Return ONLY valid JSON: {{\"sentiment_label\":\"string\", \"sentiment_score\":float, \"bias_label\":\"string\"}}."
             f"\n\nText: \"{text_to_analyze}\""
         )
         response = openAIClient.chat.completions.create(
             model="gpt-3.5-turbo", 
-            messages=[{"role": "system", "content": "You analyze text for sentiment/bias. Respond ONLY with valid JSON as specified."}, {"role": "user", "content": prompt}], 
+            messages=[{"role": "system", "content": "Analyze text for sentiment/bias. Respond ONLY with valid JSON as specified."}, {"role": "user", "content": prompt}], 
             temperature=0.1, max_tokens=150
         )
         analysis_data = json.loads(response.choices[0].message.content.strip())
@@ -194,7 +199,7 @@ def search_endpoint():
     print(f"Received search for: '{original_query}' on {selected_engines}")
     queries_to_run = {
         "mainstream_fetch": f"{original_query}", 
-        "fringe_fetch": f"{original_query} (forum OR discussion OR \"alternative opinion\" OR blog) -site:wikipedia.org -site:cdc.gov -site:who.int -site:nih.gov -site:*.gov" 
+        "fringe_fetch": f"{original_query} (forum OR discussion OR \"alternative opinion\" OR blog) -site:wikipedia.org -site:cdc.gov -site:who.int -site:nih.gov -site:*.gov -site:*.mil" # Exclude .mil too
     }
     all_fetched_results = []
     for p_type, specific_query in queries_to_run.items():
@@ -237,11 +242,7 @@ def summarize_endpoint():
     print(f"Summarize: Processing content from {src} (len: {len(content)})")
     try:
         content_to_send = content[:8000]
-        response = openAIClient.chat.completions.create(
-            model="gpt-3.5-turbo", 
-            messages=[{"role": "system", "content": "Summarize concisely (3-5 sentences)."},{"role": "user", "content": f"Summarize:\n\n{content_to_send}"}], 
-            max_tokens=250, temperature=0.3
-        )
+        response = openAIClient.chat.completions.create( model="gpt-3.5-turbo", messages=[{"role": "system", "content": "Summarize concisely (3-5 sentences)."},{"role": "user", "content": f"Summarize:\n\n{content_to_send}"}], max_tokens=250, temperature=0.3)
         summary = response.choices[0].message.content.strip()
         return jsonify({"summary": summary, "summarized_from": src})
     except Exception as e: 
@@ -251,75 +252,46 @@ def summarize_endpoint():
 @app.route('/fact-check', methods=['POST'])
 def fact_check_endpoint():
     data = request.json 
-    if not openAIClient: 
-        return jsonify({"claim":data.get('claim','N/A'),"verdict":"service_unavailable","explanation":"Fact-check unavailable.","source":"System"}), 503
-    
-    claim_fb = data.get('claim')
-    url_to_fetch = data.get('url')
+    if not openAIClient: return jsonify({"claim":data.get('claim','N/A'),"verdict":"service_unavailable","explanation":"Fact-check unavailable.","source":"System"}), 503
+    claim_fb = data.get('claim'); url_to_fetch = data.get('url')
     if not url_to_fetch and not claim_fb: return jsonify({"error": "URL or claim required"}), 400
-
-    text_for_context = claim_fb or ""
-    source_of_context = "snippet/title"
-    primary_claim = claim_fb or ""
-
+    text_for_context = claim_fb or ""; source_of_context = "snippet/title"; primary_claim = claim_fb or ""
     if url_to_fetch:
-        print(f"Fact-check: Fetching from URL: {url_to_fetch}")
-        extracted_text = fetch_text_from_url(url_to_fetch)
-        if extracted_text: 
-            text_for_context = extracted_text; source_of_context = "fetched URL content"
+        print(f"Fact-check: Fetching from URL: {url_to_fetch}"); extracted_text = fetch_text_from_url(url_to_fetch)
+        if extracted_text: text_for_context = extracted_text; source_of_context = "fetched URL content"
         elif not claim_fb: print(f"Fact-check: Failed URL fetch, no fallback claim for URL {url_to_fetch}.")
         elif claim_fb: print(f"Fact-check: Failed URL fetch for {url_to_fetch}, using fallback as context.");
-    
     if not primary_claim.strip() and text_for_context.strip(): primary_claim = text_for_context[:300] 
     if not primary_claim.strip() and not text_for_context.strip(): return jsonify({"error":"No claim/context."}),400
     if not primary_claim.strip(): primary_claim = "Evaluate general credibility of provided context."
-
     print(f"Fact-check: Claim '{primary_claim[:100]}...' context from {source_of_context} (len: {len(text_for_context)})")
-    
     try:
-        context_to_send = text_for_context[:8000]
-        primary_claim_to_send = primary_claim[:1000]
-        system_prompt = ("You are an AI fact-checking assistant. Analyze the claim based on context and general knowledge. "
-                         "Determine if 'verified', 'disputed/false', 'lacks consensus', or 'needs more context/unverifiable'. Explain briefly. "
-                         "Respond ONLY with valid JSON: {\"verdict\":\"string\", \"explanation\":\"string\"}.") # Explicitly escaped double quotes
+        context_to_send = text_for_context[:8000]; primary_claim_to_send = primary_claim[:1000]
+        system_prompt = ("You are an AI fact-checking assistant... Respond ONLY with valid JSON: {\"verdict\":\"string\", \"explanation\":\"string\"}.") # Shortened for brevity
         user_prompt = f"Claim: \"{primary_claim_to_send}\"\n\nContext: \"{context_to_send}\""
-        
-        response = openAIClient.chat.completions.create(
-            model="gpt-3.5-turbo", 
-            messages=[{"role":"system","content":system_prompt},{"role":"user","content":user_prompt}],
-            max_tokens=350,temperature=0.2
-        )
+        response = openAIClient.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role":"system","content":system_prompt},{"role":"user","content":user_prompt}], max_tokens=350,temperature=0.2)
         fact_check_str = response.choices[0].message.content.strip()
-        
-        # Attempt to parse as JSON first
         try:
             fact_check_data = json.loads(fact_check_str)
             verdict = fact_check_data.get("verdict","needs_context").lower().replace(" ","_")
             explanation = fact_check_data.get("explanation","AI provided no detailed explanation.")
         except json.JSONDecodeError:
-            # If direct JSON parsing fails, try ast.literal_eval for Python dict-like strings
             print(f"Fact-check: OpenAI response not direct JSON. Trying ast.literal_eval. Raw: '{fact_check_str}'")
             try:
-                # This can convert "{'key':'value'}" to a Python dict
                 pseudo_json_data = ast.literal_eval(fact_check_str) 
                 if isinstance(pseudo_json_data, dict):
                     verdict = pseudo_json_data.get("verdict","needs_context_ast_eval").lower().replace(" ","_")
                     explanation = pseudo_json_data.get("explanation", f"AI explanation (processed from dict-like string): {fact_check_str}")
                     print(f"Fact-check: Successfully parsed with ast.literal_eval. Verdict: {verdict}")
-                else: # ast.literal_eval didn't return a dict
-                    raise ValueError("ast.literal_eval did not produce a dictionary.")
-            except (ValueError, SyntaxError, TypeError) as e: # Catch errors from ast.literal_eval or if it's not a dict
-                print(f"Fact-check: ast.literal_eval also failed or returned non-dict. Error: {e}. Using keyword fallback.")
+                else: raise ValueError("ast.literal_eval did not produce a dictionary.")
+            except Exception as e: 
+                print(f"Fact-check: ast.literal_eval also failed. Error: {e}. Using keyword fallback.")
                 explanation = f"AI response format error. Raw output: {fact_check_str}"
                 if "verified" in fact_check_str.lower(): verdict = "verified"
                 elif "disputed" in fact_check_str.lower() or "false" in fact_check_str.lower(): verdict = "disputed_false"
                 elif "lacks consensus" in fact_check_str.lower(): verdict = "lacks_consensus"
                 else: verdict = "needs_context_fallback"
-            
-        return jsonify({
-            "claim":primary_claim_to_send, "verdict":verdict,
-            "explanation":explanation, "source":f"AI Analysis (Context: {source_of_context})"
-        })
+        return jsonify({"claim":primary_claim_to_send, "verdict":verdict, "explanation":explanation, "source":f"AI Analysis (Context: {source_of_context})"})
     except Exception as e: 
         print(f"Error during OpenAI fact-checking main try block: {type(e).__name__} - {e}")
         return jsonify({"error": f"Fact-check failed: {type(e).__name__}", "claim": primary_claim}), 500
@@ -339,10 +311,9 @@ def score_endpoint():
         "verified": FACT_CHECK_MAX_SCORE, "neutral": 0, "disputed": -FACT_CHECK_MAX_SCORE, 
         "disputed_false": -FACT_CHECK_MAX_SCORE, "pending": -2, 
         "lacks_consensus": -int(FACT_CHECK_MAX_SCORE*0.4), "needs_context": 0, 
-        "needs_context_format_error": 0, "needs_context_ast_eval": 0, "needs_context_fallback": 0, # Added new verdict types
+        "needs_context_format_error": 0, "needs_context_ast_eval": 0, "needs_context_fallback": 0,
         "service_unavailable":0, "unverifiable": -int(FACT_CHECK_MAX_SCORE*0.6),
-        "error_parsing": -5, "neutral_unavailable": 0, "neutral_parsing_error": 0, 
-        "neutral_error": 0, "error": -5
+        "error_parsing": -5, "neutral_unavailable": 0, "neutral_parsing_error": 0, "neutral_error": 0, "error": -5
     }
     fact_check_score = fact_check_score_map.get(factcheckVerdict, 0)
     intrinsic_type_quality_rating = {
@@ -350,7 +321,7 @@ def score_endpoint():
         "encyclopedia": 0.7, "news_media_mainstream": 0.6, "news_opinion_blog_live": 0.3,
         "ngo_nonprofit_publication": 0.5, "ngo_nonprofit_organization": 0.4, "ngo_nonprofit_general": 0.2,
         "corporate_blog_pr_info": 0.1, "news_media_other_or_blog": -0.3, 
-        "social_media_platform": -0.8, "social_media_platform_video": -0.7,
+        "social_media_platform": -0.8, "social_media_platform_video": -0.7, 
         "social_media_channel_creator": -0.5, "social_blogging_platform_user_pub": -0.4,
         "social_blogging_platform": -0.6, "website_general": 0.0, 
         "unknown_url": -0.9, "unknown_other": -0.9, "unknown_error_parsing": -1.0,
@@ -363,10 +334,8 @@ def score_endpoint():
     return jsonify({
         "intrinsic_credibility_score": final_score,
         "factors": { 
-            "base_trust_contribution": round(base_trust_score, 2),
-            "recency_contribution": round(recency_score, 2),
-            "fact_check_contribution": round(fact_check_score, 2),
-            "type_quality_adjustment": round(intrinsic_type_adjustment, 2)
+            "base_trust_contribution": round(base_trust_score, 2), "recency_contribution": round(recency_score, 2),
+            "fact_check_contribution": round(fact_check_score, 2), "type_quality_adjustment": round(intrinsic_type_adjustment, 2)
         }
     })
 
