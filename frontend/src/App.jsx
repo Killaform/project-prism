@@ -1,11 +1,11 @@
 import React from 'react';
-import { useState, useEffect } from 'react'; // Removed useCallback for now
+import { useState, useEffect } from 'react';
 import { Search, Settings, BarChart2, FileText, CheckCircle, AlertCircle, Clock, ExternalLink } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import './App.css';
 import logoSrc from './assets/logo.png';
 
-const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateScore }) => { // Added index and onUpdateScore
+const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateScore }) => {
   const getFavicon = (url) => {
     try {
       const domain = new URL(url).hostname;
@@ -17,8 +17,6 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateSco
   };
 
   const handleScoreButtonClick = () => {
-    // This function is a placeholder if we want an explicit button to trigger score later
-    // For now, score updates after fact-check
     if (onUpdateScore) {
         console.log("Manually requesting score update for item index:", index)
         onUpdateScore(index);
@@ -62,7 +60,7 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateSco
           <div 
             className="text-sm font-semibold text-gray-700 hover:text-purple-600 transition-colors cursor-pointer"
             title="Credibility score (updates after fact-check)"
-            onClick={handleScoreButtonClick} // Optional: allow manual refresh of score
+            onClick={handleScoreButtonClick}
             >
             Credibility: <span className="text-purple-700 font-bold">{result.credibility_score !== null && result.credibility_score !== undefined ? result.credibility_score : 'N/A'}</span>
             {result.credibility_factors && (
@@ -72,14 +70,14 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateSco
           
           <div className="flex gap-2 flex-wrap">
             <button
-              onClick={() => onSummarize(index)} // Pass index
+              onClick={() => onSummarize(index)}
               className="text-xs bg-purple-100 text-purple-700 hover:bg-purple-200 px-3 py-1.5 rounded-md transition-colors flex items-center shadow-sm hover:shadow-md"
               title="Summarize content from URL"
             >
               <FileText size={14} className="inline mr-1.5" /> Summarize
             </button>
             <button
-              onClick={() => onFactCheck(index)} // Pass index
+              onClick={() => onFactCheck(index)}
               className="text-xs bg-pink-100 text-pink-700 hover:bg-pink-200 px-3 py-1.5 rounded-md transition-colors flex items-center shadow-sm hover:shadow-md"
               title="Fact-Check claim from URL"
             >
@@ -125,7 +123,7 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [perspective, setPerspective] = useState(50); // User's perspective slider value
+  const [perspective, setPerspective] = useState(50);
   const [selectedEngines, setSelectedEngines] = useState({
     google: true,
     bing: true,
@@ -136,25 +134,19 @@ function App() {
   const [sentimentData, setSentimentData] = useState([]);
   const PIE_COLORS = ['#9333EA', '#F472B6', '#A78BFA', '#EDE9FE', '#6B21A8', '#DB2777', '#7E22CE'];
 
-  // Function to update credibility score for a specific result
   const updateCredibilityForResult = async (resultIndex) => {
     const resultToScore = searchResults[resultIndex];
     if (!resultToScore) return;
 
     console.log(`[FRONTEND] Updating score for item ${resultIndex}:`, resultToScore.title);
-    // Assuming these values are available or have sensible defaults.
-    // Frontend needs to determine/store base_trust and recency_boost per result if they vary.
-    // For now, using defaults if not present on the result object.
     const payload = {
       source_type: resultToScore.source_type_label || 'unknown',
-      base_trust: resultToScore.base_trust || 50, // Default if not set
-      sliderValue: perspective, // Current global slider value
-      recency_boost: resultToScore.recency_boost || 0, // Default if not set
+      base_trust: resultToScore.base_trust || 50,
+      sliderValue: perspective, 
+      recency_boost: resultToScore.recency_boost || 0, 
       factcheckVerdict: resultToScore.factCheck?.verdict || resultToScore.factcheckVerdict || 'pending',
     };
-
     console.log("[FRONTEND] Calling /score with payload:", payload);
-
     try {
       const response = await fetch(`http://127.0.0.1:5001/score`, {
         method: 'POST',
@@ -166,22 +158,18 @@ function App() {
         console.error("[FRONTEND] /score HTTP error:", response.status, scoreData);
         throw new Error(scoreData.error || `HTTP error ${response.status}`);
       }
-      
       console.log("[FRONTEND] Received score data:", scoreData);
       setSearchResults(prevResults => prevResults.map((item, idx) => 
         idx === resultIndex ? { 
             ...item, 
             credibility_score: scoreData.credibility_score,
-            credibility_factors: scoreData.factors // Store the breakdown
+            credibility_factors: scoreData.factors
         } : item
       ));
-
     } catch (e) {
       console.error("[FRONTEND] Error calling /score endpoint:", e.message);
-      // Optionally set an error message for this specific result or a general one
     }
   };
-
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
@@ -190,10 +178,8 @@ function App() {
     }
     setIsLoading(true); setError(null);
     setSearchResults([]); updateChartData([]);
-
     const enginesToUse = Object.entries(selectedEngines)
       .filter(([,isSelected]) => isSelected).map(([engineKey]) => engineKey);
-
     if (enginesToUse.length === 0) {
       setError("Please select at least one search engine."); setIsLoading(false); return;
     }
@@ -214,12 +200,11 @@ function App() {
       }
       const data = JSON.parse(responseText);
       if (Array.isArray(data)) {
-        // Initialize credibility_score and credibility_factors for new results
         const augmentedData = data.map(item => ({
             ...item,
-            credibility_score: item.credibility_score !== undefined ? item.credibility_score : null, // Keep if backend sends it
+            credibility_score: item.credibility_score !== undefined ? item.credibility_score : null,
             credibility_factors: item.credibility_factors || null,
-            base_trust: item.base_trust || 50, // Ensure defaults if not from backend
+            base_trust: item.base_trust || 50,
             recency_boost: item.recency_boost || 0,
             factcheckVerdict: item.factcheckVerdict || 'pending'
         }));
@@ -243,7 +228,6 @@ function App() {
   const handleSummarize = async (itemIndex) => {
     const resultToSummarize = searchResults[itemIndex];
     if (!resultToSummarize) return;
-
     console.log("[FRONTEND] Summarizing:", resultToSummarize.title, "URL:", resultToSummarize.link);
     setSearchResults(prevResults => prevResults.map((r, idx) =>
       idx === itemIndex ? { ...r, summary: "Loading summary..." } : r
@@ -252,7 +236,6 @@ function App() {
       const response = await fetch(`http://127.0.0.1:5001/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Send URL and fallback text (snippet/title)
         body: JSON.stringify({ 
             url: resultToSummarize.link, 
             text: resultToSummarize.snippet || resultToSummarize.title 
@@ -274,7 +257,6 @@ function App() {
   const handleFactCheck = async (itemIndex) => {
     const resultToFactCheck = searchResults[itemIndex];
     if (!resultToFactCheck) return;
-
     console.log("[FRONTEND] Fact-checking:", resultToFactCheck.title, "URL:", resultToFactCheck.link);
     setSearchResults(prevResults => prevResults.map((r, idx) =>
       idx === itemIndex ? { ...r, factCheck: { claim: r.snippet || r.title, verdict: "checking...", explanation: "" } } : r
@@ -283,7 +265,6 @@ function App() {
       const response = await fetch(`http://127.0.0.1:5001/fact-check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Send URL and fallback claim (snippet/title)
         body: JSON.stringify({ 
             url: resultToFactCheck.link, 
             claim: resultToFactCheck.snippet || resultToFactCheck.title 
@@ -292,11 +273,9 @@ function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP error ${response.status}`);
       setSearchResults(prevResults => prevResults.map((r, idx) =>
-        idx === itemIndex ? { ...r, factCheck: data, factcheckVerdict: data.verdict } : r // Update factcheckVerdict on the result
+        idx === itemIndex ? { ...r, factCheck: data, factcheckVerdict: data.verdict } : r
       ));
-      // After successful fact-check, update the credibility score for this item
       updateCredibilityForResult(itemIndex);
-
     } catch (e) {
       console.error("[FRONTEND] Fact-check error:", e.message);
       setSearchResults(prevResults => prevResults.map((r, idx) =>
@@ -306,7 +285,6 @@ function App() {
   };
 
   const updateChartData = (data) => {
-    // ... (chart data logic remains the same)
     if (!Array.isArray(data)) {
         console.warn("[FRONTEND] updateChartData received non-array data:", data);
         setSourceTypeData([]); setSentimentData([]); return;
@@ -324,26 +302,16 @@ function App() {
   };
 
   useEffect(() => {
-    // Future: Debounce this or call it on a specific user action (e.g., "Apply Perspective")
-    // For now, it's not actively re-filtering results based on slider.
-    // If results exist, and slider changes, we *could* re-score all visible items.
-    // This is a placeholder for where perspective slider logic would go.
     console.log("Perspective slider changed to:", perspective);
-    if (searchResults.length > 0) {
-        // Example: if slider changes, re-calculate scores for all results
-        // This could be too many API calls if not careful.
-        // For now, we are only updating scores after fact-checks.
-    }
-  }, [perspective, searchResults]); // Removed searchResults from dependency to avoid too many calls on initial load
-
+  }, [perspective]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-gray-100 text-gray-800">
       <header className="bg-white shadow-md sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center">
-            {/* Updated logo size to h-[75px] */}
-            <img src={logoSrc} alt="Perspective Engine Logo" className="h-[75px] w-auto" />
+            {/* Logo size updated to h-[225px] */}
+            <img src={logoSrc} alt="Perspective Engine Logo" className="h-[225px] w-auto" />
           </div>
           <div>
             <button className="text-gray-600 hover:text-purple-700">
@@ -355,7 +323,6 @@ function App() {
 
       <main className="container mx-auto p-4 lg:p-8">
         <div className="bg-white p-6 rounded-xl shadow-xl mb-8">
-          {/* Search Input and Controls Section */}
           <div className="flex flex-col md:flex-row items-center gap-4">
             <div className="relative flex-grow w-full">
               <input
@@ -405,29 +372,23 @@ function App() {
           </div>
         </div>
 
-        {/* Error, Loading, No Results states */}
         {error && ( <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded-md shadow" role="alert"> <div className="flex"> <AlertCircle className="mr-3 mt-1 flex-shrink-0"/> <div><p className="font-bold">Error</p><p className="break-words">{error}</p></div> </div> </div> )}
         {isLoading && ( <div className="flex flex-col items-center justify-center text-purple-600 h-64"> <svg className="animate-spin h-12 w-12 text-purple-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"> <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle> <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path> </svg> <p className="text-xl font-semibold">Searching perspectives...</p> <p className="text-sm text-gray-500">Please wait while we gather and analyze results.</p> </div> )}
         {!isLoading && !error && searchResults.length === 0 && searchQuery && ( <div className="text-center text-gray-500 py-10"> <Clock size={48} className="mx-auto mb-4 text-purple-300" /> <p className="text-xl">No results found for "{searchQuery}".</p> <p className="text-sm">Try different terms or check API status if issues persist.</p> </div> )}
 
-        {/* Results and Charts */}
         {!isLoading && !error && searchResults.length > 0 && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              {/* Source Types Chart */}
               <div className="md:col-span-1 bg-white p-4 rounded-xl shadow-lg"> <h3 className="text-lg font-semibold mb-3 text-purple-700">Source Types</h3> {sourceTypeData.length > 0 ? ( <ResponsiveContainer width="100%" height={200}> <PieChart> <Pie data={sourceTypeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label> {sourceTypeData.map((entry, index) => ( <Cell key={`cell-source-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} /> ))} </Pie><Tooltip /><Legend /> </PieChart> </ResponsiveContainer> ) : <p className="text-sm text-gray-400">No source data.</p>} </div>
-              {/* Sentiment Analysis Chart */}
               <div className="md:col-span-1 bg-white p-4 rounded-xl shadow-lg"> <h3 className="text-lg font-semibold mb-3 text-purple-700">Sentiment Analysis</h3> {sentimentData.length > 0 ? ( <ResponsiveContainer width="100%" height={200}> <PieChart> <Pie data={sentimentData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label> {sentimentData.map((entry, index) => ( <Cell key={`cell-sentiment-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} /> ))} </Pie><Tooltip /><Legend /> </PieChart> </ResponsiveContainer> ) : <p className="text-sm text-gray-400">No sentiment data.</p>} </div>
-              {/* Credibility Overview Chart (Placeholder) */}
               <div className="md:col-span-1 bg-white p-4 rounded-xl shadow-lg"> <h3 className="text-lg font-semibold mb-3 text-purple-700">Credibility Overview</h3> <div className="flex items-center justify-center h-[200px] text-gray-400"> <BarChart2 size={48} /><p className="ml-2 text-sm">Credibility chart coming soon.</p> </div> </div>
             </div>
-            {/* Search Results List */}
             <div className="search-results-list">
-              {searchResults.map((result, index) => ( // Changed filteredResults to searchResults
+              {searchResults.map((result, index) => (
                 <SearchResultItem
                   key={result.link + '-' + index} result={result} index={index}
                   onSummarize={handleSummarize} onFactCheck={handleFactCheck}
-                  onUpdateScore={updateCredibilityForResult} // Pass the new handler
+                  onUpdateScore={updateCredibilityForResult}
                 />
               ))}
             </div>
