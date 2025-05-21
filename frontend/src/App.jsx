@@ -1,9 +1,22 @@
 import React from 'react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Search, Settings, BarChart2, FileText, CheckCircle, AlertCircle, Clock, ExternalLink } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import './App.css';
 import logoSrc from './assets/logo.png';
+
+// Basic debounce function
+function debounce(func, delay) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, delay);
+  };
+}
 
 const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateScore }) => {
   const getFavicon = (url) => {
@@ -16,10 +29,11 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateSco
     }
   };
 
+  // This is now mostly a placeholder if score updates are primarily through slider/fact-check
   const handleScoreButtonClick = () => {
     if (onUpdateScore) {
-        console.log("Manually requesting score update for item index:", index)
-        onUpdateScore(index);
+        console.log("[FRONTEND] SearchResultItem: Manually requesting score update for item index:", index)
+        onUpdateScore(index); // This would call the onUpdateScore passed from App.jsx
     }
   };
 
@@ -59,12 +73,12 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateSco
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div 
             className="text-sm font-semibold text-gray-700 hover:text-purple-600 transition-colors cursor-pointer"
-            title="Credibility score (updates after fact-check)"
-            onClick={handleScoreButtonClick}
+            title="Credibility score (updates after fact-check or slider change)"
+            onClick={handleScoreButtonClick} // Allow clicking score to refresh it for this item
             >
             Credibility: <span className="text-purple-700 font-bold">{result.credibility_score !== null && result.credibility_score !== undefined ? result.credibility_score : 'N/A'}</span>
             {result.credibility_factors && (
-                 <span className="text-xs text-gray-500 ml-1">(BS: {result.credibility_factors.base_trust_score}, RS: {result.credibility_factors.recency_score}, FS: {result.credibility_factors.fact_check_score}, US: {result.credibility_factors.user_slider_score})</span>
+                 <span className="text-xs text-gray-500 ml-1">(Base: {result.credibility_factors.base_trust_score}, Recency: {result.credibility_factors.recency_score}, Fact: {result.credibility_factors.fact_check_score}, Slider: {result.credibility_factors.user_slider_score})</span>
             )}
           </div>
           
@@ -95,9 +109,7 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateSco
         {result.factCheck && (
           <div className="mt-3 p-3 bg-pink-50 rounded-md text-sm shadow-inner">
             <h4 className="font-semibold text-pink-700 mb-1">Fact-Check Analysis <span className="text-xs font-normal text-gray-500">({result.factCheck.source || 'source N/A'})</span>:</h4>
-            <p className="mb-0.5">
-              <span className="font-medium">Claim:</span> {result.factCheck.claim}
-            </p>
+            {result.factCheck.claim && <p className="mb-0.5"><span className="font-medium">Claim:</span> {result.factCheck.claim}</p>}
             <p>
               <span className="font-medium">Verdict:</span>
               <span className={`ml-1 font-bold ${
@@ -110,7 +122,7 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck, onUpdateSco
                 {result.factCheck.verdict?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || "Status Unknown"}
               </span>
             </p>
-            <p className="text-gray-700 mt-1">{result.factCheck.explanation}</p>
+            <p className="text-gray-700 mt-1 whitespace-pre-wrap">{result.factCheck.explanation}</p>
           </div>
         )}
       </div>
@@ -122,6 +134,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isScoring, setIsScoring] = useState(false);
   const [error, setError] = useState(null);
   const [perspective, setPerspective] = useState(50);
   const [selectedEngines, setSelectedEngines] = useState({
@@ -134,19 +147,19 @@ function App() {
   const [sentimentData, setSentimentData] = useState([]);
   const PIE_COLORS = ['#9333EA', '#F472B6', '#A78BFA', '#EDE9FE', '#6B21A8', '#DB2777', '#7E22CE'];
 
-  const updateCredibilityForResult = async (resultIndex) => {
-    const resultToScore = searchResults[resultIndex];
-    if (!resultToScore) return;
-
-    console.log(`[FRONTEND] Updating score for item ${resultIndex}:`, resultToScore.title);
+  const updateCredibilityForItem = useCallback(async (itemToScore, itemIndex, currentSliderValue) => {
+    if (!itemToScore) {
+        console.warn(`[FRONTEND] updateCredibilityForItem: itemToScore is undefined for index ${itemIndex}`);
+        return null; 
+    }
+    console.log(`[FRONTEND] Updating score for item '${itemToScore.title}' (idx: ${itemIndex}) with slider: ${currentSliderValue}`);
     const payload = {
-      source_type: resultToScore.source_type_label || 'unknown',
-      base_trust: resultToScore.base_trust || 50,
-      sliderValue: perspective, 
-      recency_boost: resultToScore.recency_boost || 0, 
-      factcheckVerdict: resultToScore.factCheck?.verdict || resultToScore.factcheckVerdict || 'pending',
+      source_type: itemToScore.source_type_label || 'unknown',
+      base_trust: itemToScore.base_trust || 50,
+      sliderValue: currentSliderValue,
+      recency_boost: itemToScore.recency_boost || 0, 
+      factcheckVerdict: itemToScore.factCheck?.verdict || itemToScore.factcheckVerdict || 'pending',
     };
-    console.log("[FRONTEND] Calling /score with payload:", payload);
     try {
       const response = await fetch(`http://127.0.0.1:5001/score`, {
         method: 'POST',
@@ -155,71 +168,96 @@ function App() {
       });
       const scoreData = await response.json();
       if (!response.ok) {
-        console.error("[FRONTEND] /score HTTP error:", response.status, scoreData);
-        throw new Error(scoreData.error || `HTTP error ${response.status}`);
+        console.error("[FRONTEND] /score HTTP error for item", itemToScore.title, response.status, scoreData);
+        return { ...itemToScore, score_error: scoreData.error || `HTTP error ${response.status}` };
       }
-      console.log("[FRONTEND] Received score data:", scoreData);
-      setSearchResults(prevResults => prevResults.map((item, idx) => 
-        idx === resultIndex ? { 
-            ...item, 
-            credibility_score: scoreData.credibility_score,
-            credibility_factors: scoreData.factors
-        } : item
-      ));
+      return { ...itemToScore, credibility_score: scoreData.credibility_score, credibility_factors: scoreData.factors, score_error: null };
     } catch (e) {
-      console.error("[FRONTEND] Error calling /score endpoint:", e.message);
+      console.error(`[FRONTEND] Error calling /score for item '${itemToScore.title}':`, e.message);
+      return { ...itemToScore, score_error: e.message };
+    }
+  }, []);
+
+  const handleBatchScoreUpdate = useCallback(async (currentPerspectiveValue, resultsToUpdate) => {
+    if (!resultsToUpdate || resultsToUpdate.length === 0) return;
+    console.log(`[FRONTEND] Batch scoring ${resultsToUpdate.length} results with perspective: ${currentPerspectiveValue}`);
+    setIsScoring(true);
+    const scoreUpdatePromises = resultsToUpdate.map((result, index) => 
+        // Important: Ensure the 'index' here corresponds to the item's true position in the *original list*
+        // if resultsToUpdate is a sub-list or a copy. For now, assuming it's the full list.
+        // To be safe, we might need to find the index from the main searchResults state if resultsToUpdate is a modified copy.
+        // However, the way it's called from handlePerspectiveChange (passes current searchResults) and handleSearch (passes initialResults)
+        // means 'index' should be consistent with the passed array.
+        updateCredibilityForItem(result, resultsToUpdate.indexOf(result), currentPerspectiveValue) 
+    );
+    try {
+        let updatedResultsWithScores = await Promise.all(scoreUpdatePromises);
+        updatedResultsWithScores = updatedResultsWithScores.filter(r => r !== null); // Remove nulls if any promise failed critically
+        const sortedResults = [...updatedResultsWithScores].sort((a, b) => {
+            const scoreA = a.credibility_score !== null && a.credibility_score !== undefined ? a.credibility_score : -Infinity;
+            const scoreB = b.credibility_score !== null && b.credibility_score !== undefined ? b.credibility_score : -Infinity;
+            return scoreB - scoreA;
+        });
+        setSearchResults(sortedResults);
+    } catch (error) {
+        console.error("[FRONTEND] Error during batch score update Promise.all:", error);
+        setError("An error occurred while updating all scores.");
+    } finally {
+        setIsScoring(false);
+    }
+  }, [updateCredibilityForItem]);
+
+  const debouncedBatchScoreUpdate = useCallback(
+    debounce((newPerspectiveValue, currentSearchResults) => {
+      handleBatchScoreUpdate(newPerspectiveValue, currentSearchResults);
+    }, 750),
+    [handleBatchScoreUpdate] 
+  );
+
+  const handlePerspectiveChange = (event) => {
+    const newPerspectiveValue = parseInt(event.target.value);
+    setPerspective(newPerspectiveValue);
+    if (searchResults.length > 0) {
+      debouncedBatchScoreUpdate(newPerspectiveValue, searchResults);
     }
   };
-
+  
   const handleSearch = async () => {
-    if (!searchQuery.trim()) {
-      setError("Please enter a search query.");
-      setSearchResults([]); updateChartData([]); return;
-    }
+    if (!searchQuery.trim()) { setError("Please enter a search query."); setSearchResults([]); updateChartData([]); return; }
     setIsLoading(true); setError(null);
-    setSearchResults([]); updateChartData([]);
-    const enginesToUse = Object.entries(selectedEngines)
-      .filter(([,isSelected]) => isSelected).map(([engineKey]) => engineKey);
-    if (enginesToUse.length === 0) {
-      setError("Please select at least one search engine."); setIsLoading(false); return;
-    }
+    setSearchResults([]); updateChartData([]); 
+    const enginesToUse = Object.entries(selectedEngines).filter(([,isSelected]) => isSelected).map(([engineKey]) => engineKey);
+    if (enginesToUse.length === 0) { setError("Please select at least one search engine."); setIsLoading(false); return; }
+    
     console.log(`[FRONTEND] Initiating search for: "${searchQuery}" on engines: ${enginesToUse.join(', ')}`);
     try {
       const response = await fetch(`http://127.0.0.1:5001/search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: searchQuery, engines: enginesToUse }),
       });
       const responseText = await response.text();
       if (!response.ok) {
-        console.error("[FRONTEND] HTTP error! Status:", response.status, "Response Text:", responseText);
-        let errorData = { message: `Server error: ${response.status} ${response.statusText}` };
-        try { errorData = JSON.parse(responseText); } 
-        catch (e) { errorData.detail = responseText.substring(0, 200) || "Could not retrieve error details."; }
-        throw new Error(errorData.error || errorData.message || `Failed to fetch: ${response.status}`);
+        let errorData = { message: `Server error: ${response.status}` };
+        try { errorData = JSON.parse(responseText); } catch (e) { errorData.detail = responseText.substring(0,200); }
+        throw new Error(errorData.error || errorData.message);
       }
       const data = JSON.parse(responseText);
       if (Array.isArray(data)) {
-        const augmentedData = data.map(item => ({
-            ...item,
-            credibility_score: item.credibility_score !== undefined ? item.credibility_score : null,
-            credibility_factors: item.credibility_factors || null,
-            base_trust: item.base_trust || 50,
-            recency_boost: item.recency_boost || 0,
+        const initialResults = data.map(item => ({
+            ...item, credibility_score: null, credibility_factors: null,
+            base_trust: item.base_trust || 50, recency_boost: item.recency_boost || 0,
             factcheckVerdict: item.factcheckVerdict || 'pending'
         }));
-        setSearchResults(augmentedData);
-        updateChartData(augmentedData);
-      } else {
-        setError("Received unexpected data format from server.");
-        setSearchResults([]); updateChartData([]);
-      }
-    } catch (err) {
-      setError(err.message || "Failed to fetch search results.");
-      setSearchResults([]); updateChartData([]);
-    } finally {
-      setIsLoading(false);
-    }
+        // Set results first without scores to show them quickly
+        setSearchResults(initialResults);
+        updateChartData(initialResults);
+        // Then, trigger batch scoring for these initial results
+        if (initialResults.length > 0) {
+            handleBatchScoreUpdate(perspective, initialResults); 
+        }
+      } else { setError("Received unexpected data format from server."); }
+    } catch (err) { setError(err.message || "Failed to fetch search results."); } 
+    finally { setIsLoading(false); }
   };
 
   const handleKeyDown = (event) => { if (event.key === 'Enter') handleSearch(); };
@@ -229,154 +267,112 @@ function App() {
     const resultToSummarize = searchResults[itemIndex];
     if (!resultToSummarize) return;
     console.log("[FRONTEND] Summarizing:", resultToSummarize.title, "URL:", resultToSummarize.link);
-    setSearchResults(prevResults => prevResults.map((r, idx) =>
-      idx === itemIndex ? { ...r, summary: "Loading summary..." } : r
-    ));
+    setSearchResults(prevResults => prevResults.map((r, idx) => idx === itemIndex ? { ...r, summary: "Loading summary..." } : r ));
     try {
       const response = await fetch(`http://127.0.0.1:5001/summarize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            url: resultToSummarize.link, 
-            text: resultToSummarize.snippet || resultToSummarize.title 
-        })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: resultToSummarize.link, text: resultToSummarize.snippet || resultToSummarize.title })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP error ${response.status}`);
-      setSearchResults(prevResults => prevResults.map((r, idx) =>
-        idx === itemIndex ? { ...r, summary: data.summary, summarized_from: data.summarized_from } : r
-      ));
+      setSearchResults(prevResults => prevResults.map((r, idx) => idx === itemIndex ? { ...r, summary: data.summary, summarized_from: data.summarized_from } : r ));
     } catch (e) {
       console.error("[FRONTEND] Summarization error:", e.message);
-      setSearchResults(prevResults => prevResults.map((r, idx) =>
-        idx === itemIndex ? { ...r, summary: `Could not load summary: ${e.message}` } : r
-      ));
+      setSearchResults(prevResults => prevResults.map((r, idx) => idx === itemIndex ? { ...r, summary: `Could not load summary: ${e.message}` } : r ));
     }
   };
 
   const handleFactCheck = async (itemIndex) => {
-    const resultToFactCheck = searchResults[itemIndex];
-    if (!resultToFactCheck) return;
-    console.log("[FRONTEND] Fact-checking:", resultToFactCheck.title, "URL:", resultToFactCheck.link);
+    const currentItem = searchResults[itemIndex]; // Get a stable reference
+    if (!currentItem) return;
+
+    console.log("[FRONTEND] Fact-checking:", currentItem.title, "URL:", currentItem.link);
     setSearchResults(prevResults => prevResults.map((r, idx) =>
-      idx === itemIndex ? { ...r, factCheck: { claim: r.snippet || r.title, verdict: "checking...", explanation: "" } } : r
+      idx === itemIndex ? { ...r, factCheck: { claim: currentItem.snippet || currentItem.title, verdict: "checking...", explanation: "" } } : r
     ));
+    
+    let factCheckData;
     try {
       const response = await fetch(`http://127.0.0.1:5001/fact-check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            url: resultToFactCheck.link, 
-            claim: resultToFactCheck.snippet || resultToFactCheck.title 
-        })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: currentItem.link, claim: currentItem.snippet || currentItem.title })
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP error ${response.status}`);
-      setSearchResults(prevResults => prevResults.map((r, idx) =>
-        idx === itemIndex ? { ...r, factCheck: data, factcheckVerdict: data.verdict } : r
+      factCheckData = await response.json();
+      if (!response.ok) throw new Error(factCheckData.error || `HTTP error ${response.status}`);
+      
+      // Create an intermediate item that ONLY has the updated factCheck information
+      const itemWithNewFactCheck = { 
+          ...currentItem, // Use the stable reference from the beginning of the function
+          factCheck: factCheckData, 
+          factcheckVerdict: factCheckData.verdict 
+      };
+
+      // Now score this item (which includes the new factCheck data)
+      const scoredItem = await updateCredibilityForItem(itemWithNewFactCheck, itemIndex, perspective);
+
+      // Update state with the item that has both new fact-check and new score
+      setSearchResults(prevResults => prevResults.map((r, idx) => 
+        idx === itemIndex ? (scoredItem || itemWithNewFactCheck) : r 
       ));
-      updateCredibilityForResult(itemIndex);
+
     } catch (e) {
       console.error("[FRONTEND] Fact-check error:", e.message);
       setSearchResults(prevResults => prevResults.map((r, idx) =>
-        idx === itemIndex ? { ...r, factCheck: { claim: r.snippet || r.title, verdict: "error", explanation: `Could not perform fact-check: ${e.message}` } } : r
+        idx === itemIndex ? { 
+            ...currentItem, // Revert to original item for this fact check action
+            factCheck: { claim: currentItem.snippet || currentItem.title, verdict: "error", explanation: `Fact-check failed: ${e.message}` } 
+        } : r
       ));
     }
   };
 
   const updateChartData = (data) => {
-    if (!Array.isArray(data)) {
-        console.warn("[FRONTEND] updateChartData received non-array data:", data);
-        setSourceTypeData([]); setSentimentData([]); return;
-    }
-    const sourceCounts = data.reduce((acc, curr) => {
-      const type = curr.source_type_label || 'Unknown';
-      acc[type] = (acc[type] || 0) + 1; return acc;
-    }, {});
+    if (!Array.isArray(data)) { setSourceTypeData([]); setSentimentData([]); return; }
+    const sourceCounts = data.reduce((acc, curr) => { const type = curr.source_type_label || 'Unknown'; acc[type] = (acc[type] || 0) + 1; return acc; }, {});
     setSourceTypeData(Object.entries(sourceCounts).map(([name, value]) => ({ name, value })));
-    const sentimentCounts = data.reduce((acc, curr) => {
-      const sentimentLabel = curr.sentiment?.label || 'Neutral';
-      acc[sentimentLabel] = (acc[sentimentLabel] || 0) + 1; return acc;
-    }, {});
+    const sentimentCounts = data.reduce((acc, curr) => { const sentimentLabel = curr.sentiment?.label || 'Neutral'; acc[sentimentLabel] = (acc[sentimentLabel] || 0) + 1; return acc; }, {});
     setSentimentData(Object.entries(sentimentCounts).map(([name, value]) => ({ name, value })));
   };
-
-  useEffect(() => {
-    console.log("Perspective slider changed to:", perspective);
-  }, [perspective]);
-
+  
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-gray-100 text-gray-800">
       <header className="bg-white shadow-md sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center">
-            {/* Logo size updated to h-[225px] */}
             <img src={logoSrc} alt="Perspective Engine Logo" className="h-[225px] w-auto" />
           </div>
-          <div>
-            <button className="text-gray-600 hover:text-purple-700">
-              <Settings size={24} />
-            </button>
-          </div>
+          <div> <button className="text-gray-600 hover:text-purple-700"> <Settings size={24} /> </button> </div>
         </div>
       </header>
-
       <main className="container mx-auto p-4 lg:p-8">
         <div className="bg-white p-6 rounded-xl shadow-xl mb-8">
           <div className="flex flex-col md:flex-row items-center gap-4">
             <div className="relative flex-grow w-full">
-              <input
-                type="text" value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Enter your query..."
-                className="w-full p-4 pl-12 text-lg border-2 border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-shadow hover:shadow-md"
-              />
+              <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={handleKeyDown} placeholder="Enter your query..." className="w-full p-4 pl-12 text-lg border-2 border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none transition-shadow hover:shadow-md"/>
               <Search size={24} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-purple-400" />
             </div>
-            <button
-              onClick={handleSearch} disabled={isLoading}
-              className="w-full md:w-auto bg-purple-600 hover:bg-purple-700 text-white font-semibold py-4 px-8 rounded-lg text-lg shadow-md hover:shadow-lg transition-all duration-150 ease-in-out disabled:opacity-50 flex items-center justify-center"
-            >
-              {isLoading ? ( <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"> <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle> <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path> </svg> ) : ( <Search size={20} className="mr-2" /> )}
-              Search
+            <button onClick={handleSearch} disabled={isLoading || isScoring} className="w-full md:w-auto bg-purple-600 hover:bg-purple-700 text-white font-semibold py-4 px-8 rounded-lg text-lg shadow-md hover:shadow-lg transition-all duration-150 ease-in-out disabled:opacity-50 flex items-center justify-center">
+              {(isLoading || isScoring) ? ( <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"> <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle> <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path> </svg> ) : ( <Search size={20} className="mr-2" /> )}
+              {isScoring ? 'Updating...' : isLoading ? 'Searching...' : 'Search'}
             </button>
           </div>
           <div className="mt-6">
-            <label htmlFor="perspective-slider" className="block text-sm font-medium text-gray-700 mb-1">
-              Adjust Perspective (Score updates on fact-check for now)
-            </label>
-            <input
-              id="perspective-slider" type="range" min="0" max="100" value={perspective}
-              onChange={(e) => setPerspective(parseInt(e.target.value))}
-              className="w-full h-3 bg-gradient-to-r from-pink-400 via-purple-500 to-indigo-500 rounded-lg appearance-none cursor-pointer range-lg accent-purple-600"
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>Fringe</span><span>Neutral</span><span>Mainstream</span>
-            </div>
+            <label htmlFor="perspective-slider" className="block text-sm font-medium text-gray-700 mb-1">Adjust Perspective (Results re-sort after pause)</label>
+            <input id="perspective-slider" type="range" min="0" max="100" value={perspective} onChange={handlePerspectiveChange} className="w-full h-3 bg-gradient-to-r from-pink-400 via-purple-500 to-indigo-500 rounded-lg appearance-none cursor-pointer range-lg accent-purple-600"/>
+            <div className="flex justify-between text-xs text-gray-500 mt-1"><span>Fringe</span><span>Neutral</span><span>Mainstream</span></div>
           </div>
           <div className="mt-4">
             <p className="text-sm font-medium text-gray-700 mb-2">Search Engines:</p>
             <div className="flex flex-wrap gap-x-6 gap-y-2">
-              {['google', 'bing', 'duckduckgo'].map((engine) => (
-                <label key={engine} className="inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox" checked={selectedEngines[engine]}
-                    onChange={() => handleEngineChange(engine)}
-                    className="form-checkbox h-5 w-5 text-purple-600 border-gray-300 rounded focus:ring-purple-500 accent-purple-600"
-                  />
-                  <span className="ml-2 text-gray-700 capitalize">{engine}</span>
-                </label>
-              ))}
+              {['google', 'bing', 'duckduckgo'].map((engine) => ( <label key={engine} className="inline-flex items-center cursor-pointer"> <input type="checkbox" checked={selectedEngines[engine]} onChange={() => handleEngineChange(engine)} className="form-checkbox h-5 w-5 text-purple-600 border-gray-300 rounded focus:ring-purple-500 accent-purple-600"/> <span className="ml-2 text-gray-700 capitalize">{engine}</span> </label> ))}
             </div>
           </div>
         </div>
-
         {error && ( <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded-md shadow" role="alert"> <div className="flex"> <AlertCircle className="mr-3 mt-1 flex-shrink-0"/> <div><p className="font-bold">Error</p><p className="break-words">{error}</p></div> </div> </div> )}
-        {isLoading && ( <div className="flex flex-col items-center justify-center text-purple-600 h-64"> <svg className="animate-spin h-12 w-12 text-purple-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"> <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle> <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path> </svg> <p className="text-xl font-semibold">Searching perspectives...</p> <p className="text-sm text-gray-500">Please wait while we gather and analyze results.</p> </div> )}
-        {!isLoading && !error && searchResults.length === 0 && searchQuery && ( <div className="text-center text-gray-500 py-10"> <Clock size={48} className="mx-auto mb-4 text-purple-300" /> <p className="text-xl">No results found for "{searchQuery}".</p> <p className="text-sm">Try different terms or check API status if issues persist.</p> </div> )}
-
-        {!isLoading && !error && searchResults.length > 0 && (
+        {isLoading && !isScoring && ( <div className="flex flex-col items-center justify-center text-purple-600 h-64"> <svg className="animate-spin h-12 w-12 text-purple-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"> <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle> <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path> </svg> <p className="text-xl font-semibold">Searching perspectives...</p> <p className="text-sm text-gray-500">Please wait while we gather and analyze results.</p> </div> )}
+        {isScoring && ( <div className="flex flex-col items-center justify-center text-purple-600 h-64"> <svg className="animate-spin h-12 w-12 text-purple-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"> <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle> <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path> </svg> <p className="text-xl font-semibold">Updating scores with new perspective...</p> </div>)}
+        {!isLoading && !isScoring && !error && searchResults.length === 0 && searchQuery && ( <div className="text-center text-gray-500 py-10"> <Clock size={48} className="mx-auto mb-4 text-purple-300" /> <p className="text-xl">No results found for "{searchQuery}".</p> <p className="text-sm">Try different terms or check API status if issues persist.</p> </div> )}
+        {!isLoading && !isScoring && !error && searchResults.length > 0 && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
               <div className="md:col-span-1 bg-white p-4 rounded-xl shadow-lg"> <h3 className="text-lg font-semibold mb-3 text-purple-700">Source Types</h3> {sourceTypeData.length > 0 ? ( <ResponsiveContainer width="100%" height={200}> <PieChart> <Pie data={sourceTypeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label> {sourceTypeData.map((entry, index) => ( <Cell key={`cell-source-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} /> ))} </Pie><Tooltip /><Legend /> </PieChart> </ResponsiveContainer> ) : <p className="text-sm text-gray-400">No source data.</p>} </div>
@@ -386,16 +382,16 @@ function App() {
             <div className="search-results-list">
               {searchResults.map((result, index) => (
                 <SearchResultItem
-                  key={result.link + '-' + index} result={result} index={index}
+                  key={result.link + '-' + index + '-' + (result.credibility_score || 'na') + '-' + (result.factCheck?.verdict || 'fv_na')} 
+                  result={result} index={index}
                   onSummarize={handleSummarize} onFactCheck={handleFactCheck}
-                  onUpdateScore={updateCredibilityForResult}
+                  onUpdateScore={(itemIdx) => updateCredibilityForItem(searchResults[itemIdx], itemIdx, perspective)}
                 />
               ))}
             </div>
           </>
         )}
       </main>
-
       <footer className="bg-gray-800 text-white text-center p-6 mt-12">
         <p>&copy; {new Date().getFullYear()} Perspective Engine. All rights reserved.</p>
         <p className="text-xs text-gray-400">Breaking filter bubbles, one search at a time.</p>
