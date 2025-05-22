@@ -1,13 +1,17 @@
 import os
 import json
-import ast 
+import ast
+from datetime import datetime, timedelta, timezone # Added timezone for UTC
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy # Added
+from flask_bcrypt import Bcrypt # Added
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager # Added
 from dotenv import load_dotenv
 from serpapi import SerpApiClient
-from openai import OpenAI 
+from openai import OpenAI
 import google.generativeai as genai # For future Gemini integration
-import requests 
+import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
@@ -22,6 +26,59 @@ else:
 app = Flask(__name__)
 CORS(app)
 
+# --- BEGIN NEW CONFIGURATIONS FOR USER ACCOUNTS ---
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") # For Flask sessions and JWT
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["JWT_SECRET_KEY"] = os.getenv("SECRET_KEY") # For JWT signing (can be same as Flask SECRET_KEY or different)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24) # Optional: set token expiry
+
+db = SQLAlchemy(app) # Initialize SQLAlchemy
+bcrypt = Bcrypt(app) # Initialize Bcrypt
+jwt = JWTManager(app) # Initialize JWTManager
+# --- END NEW CONFIGURATIONS FOR USER ACCOUNTS ---
+
+# --- BEGIN DATABASE MODELS ---
+class User(db.Model):
+    __tablename__ = 'users' # Explicitly naming the table
+
+    id = db.Column(db.Integer, primary_key=True)
+    # google_id will be used if implementing Google OAuth
+    google_id = db.Column(db.String(120), unique=True, nullable=True) # Nullable if not all users use Google OAuth
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    name = db.Column(db.String(100), nullable=True)
+    given_name = db.Column(db.String(100), nullable=True)
+    family_name = db.Column(db.String(100), nullable=True)
+    profile_pic_url = db.Column(db.String(255), nullable=True)
+
+    # For email/password login, if we still want it alongside Google OAuth
+    password_hash = db.Column(db.String(128), nullable=True) # Nullable if not required for all users
+
+    created_at = db.Column(db.DateTime, nullable=True, default=lambda: datetime.now(timezone.utc)) # Matches (nullable in SQL if default not set by app)
+    last_login_at = db.Column(db.DateTime, nullable=True, onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relationship to SavedQuery (one user can have many saved queries)
+    # backref='author' creates a virtual 'author' attribute on SavedQuery instances
+    # lazy='dynamic' means queries aren't loaded until explicitly requested
+    saved_queries = db.relationship('SavedQuery', backref='author', lazy='dynamic', cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<User {self.email}>"
+class SavedQuery(db.Model):
+    __tablename__ = 'saved_queries' # Explicitly naming the table
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False) # Foreign key to users table
+    query_text = db.Column(db.String(500), nullable=False)
+    selected_engines = db.Column(db.JSON, nullable=False) # Storing list of engines as JSON
+    perspective = db.Column(db.String(50), nullable=False) # e.g., "balanced", "mainstream", "fringe"
+    # Using timezone.utc for default
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<SavedQuery '{self.query_text[:30]}...' by User ID {self.user_id}>"
+# --- END DATABASE MODELS ---
+
 SERVER_SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 SERVER_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -32,7 +89,7 @@ if SERVER_OPENAI_API_KEY:
         print("Server's OpenAI API Key loaded and client initialized.")
     except Exception as e:
         print(f"Error initializing server's OpenAI client: {e}")
-        openAIClientInstance = None 
+        openAIClientInstance = None
 else:
     print("Warning: Server's OPENAI_API_KEY not found. OpenAI features will rely on user-provided keys if available.")
 
@@ -56,29 +113,27 @@ def fetch_text_from_url(url):
             for el in soup.find_all(el_name): el.decompose()
         main_selectors = ['article','main','[role="main"]','.main-content','.article-body','#content','#main','.post-content','.entry-content','.story-body','.articletext']
         content_element = None
-        # *** THIS IS THE CORRECTED SYNTAX ***
         for selector in main_selectors:
             content_element = soup.select_one(selector)
-            if content_element: 
-                break 
-        # *** END CORRECTION ***
+            if content_element:
+                break
         if not content_element: content_element = soup.body
         if content_element:
             text_chunks = []
-            current_element_for_check = content_element 
+            current_element_for_check = content_element
             for element in content_element.find_all(['p','h1','h2','h3','h4','h5','h6','li','td','pre','blockquote'], recursive=True):
                 is_direct_child = False; parent = element.parent
                 while parent and parent != soup:
                     if parent == current_element_for_check: is_direct_child = True; break
-                    if parent.name in ['body','html'] and parent != current_element_for_check: break 
+                    if parent.name in ['body','html'] and parent != current_element_for_check: break
                     parent = parent.parent
                 if is_direct_child or (current_element_for_check and current_element_for_check.name in ['p','li'] and element.parent == current_element_for_check):
-                     chunk = element.get_text(separator=' ', strip=True)
-                     if chunk and len(chunk.split()) > 3: text_chunks.append(chunk)
+                    chunk = element.get_text(separator=' ', strip=True)
+                    if chunk and len(chunk.split()) > 3: text_chunks.append(chunk)
             if not text_chunks and content_element: text = content_element.get_text(separator='\n', strip=True)
             else: text = "\n".join(text_chunks)
-            text = '\n'.join([line.strip() for line in text.splitlines() if line.strip() and len(line.strip().split()) > 2]) 
-            print(f"Extracted ~{len(text)} chars from {url}"); return text if len(text) > 150 else None 
+            text = '\n'.join([line.strip() for line in text.splitlines() if line.strip() and len(line.strip().split()) > 2])
+            print(f"Extracted ~{len(text)} chars from {url}"); return text if len(text) > 150 else None
         return None
     except requests.exceptions.Timeout: print(f"Timeout URL {url}"); return None
     except requests.exceptions.RequestException as e: print(f"Request error URL {url}: {e}"); return None
@@ -130,16 +185,16 @@ def get_sentiment_and_bias(text_content, ai_provider='openai', user_api_key=None
         if not user_api_key: print("[AI SENTIMENT] Gemini key missing."); return {"score":0.0,"label":"neutral_key_missing"},{"score":0.0,"label":"neutral_key_missing"}
         try:
             genai.configure(api_key=user_api_key); model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            text_to_analyze = str(text_content)[:30000] 
+            text_to_analyze = str(text_content)[:30000]
             prompt = (f"Analyze the sentiment and political bias...MUST be JSON... 'sentiment_label', 'sentiment_score', 'bias_label'.\n\nSnippet: \"{text_to_analyze}\"") # Shortened
             generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
             response = model.generate_content(prompt, generation_config=generation_config)
-            analysis_data = json.loads(response.text) 
+            analysis_data = json.loads(response.text)
             return {"score": float(analysis_data.get("sentiment_score",0.0)), "label": analysis_data.get("sentiment_label","neutral").lower()},{"score":0.0,"label":analysis_data.get("bias_label","neutral").lower()}
-        except Exception as e: 
+        except Exception as e:
             print(f"Error Gemini sentiment (attempting text fallback): {type(e).__name__} - {e}")
             try:
-                model = genai.GenerativeModel('gemini-1.5-flash-latest') 
+                model = genai.GenerativeModel('gemini-1.5-flash-latest')
                 text_prompt = (f"Analyze the sentiment and political bias... Your entire response MUST be a single, valid JSON object... 'sentiment_label', 'sentiment_score', 'bias_label'.\n\nText Snippet: \"{text_to_analyze}\"")
                 response = model.generate_content(text_prompt); response_text = response.text.strip()
                 if response_text.startswith("```json"): response_text = response_text[7:]
@@ -161,6 +216,79 @@ def fetch_results_via_serpapi(query, engine_name, api_key_to_use, num_results=10
     except Exception as e: print(f"SerpApi: Error {engine_name}: {type(e).__name__} - {e}"); return []
 
 @app.route('/search', methods=['POST'])
+
+# --- BEGIN AUTHENTICATION ROUTES ---
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    # Basic email validation (you might want a more robust one)
+    if '@' not in email or '.' not in email.split('@')[-1]:
+        return jsonify({"error": "Invalid email format"}), 400
+    
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters long"}), 400
+
+    # Check if user already exists
+    existing_user = User.query.filter_by(email=email).first()
+    if existing_user:
+        return jsonify({"error": "Email already registered"}), 409 # 409 Conflict
+
+    try:
+        hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+        new_user = User(
+            email=email, 
+            password_hash=hashed_password,
+            # Other fields like name, given_name can be added here if provided during registration
+            # For now, we'll stick to email and password for simplicity
+            # google_id will be null for email/password registration
+        )
+        db.session.add(new_user)
+        db.session.commit()
+        
+        return jsonify({"message": "Registration successful. Please log in."}), 201
+
+    except Exception as e:
+        db.session.rollback() # Rollback in case of error
+        print(f"Error during registration: {e}") # Log the error
+        return jsonify({"error": "An error occurred during registration. Please try again."}), 500
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+
+    if user and user.password_hash and bcrypt.check_password_hash(user.password_hash, password):
+        # User exists and password matches for an email/password user
+        access_token = create_access_token(identity=user.id) # Create JWT token with user.id as identity
+        return jsonify(access_token=access_token, user_id=user.id, email=user.email), 200
+    elif user and not user.password_hash and user.google_id:
+        # User exists but seems to be a Google OAuth user without a local password
+        return jsonify({"error": "Please log in with Google. This account was registered via Google."}), 401
+    else:
+        # Invalid credentials (user not found or password mismatch)
+        return jsonify({"error": "Invalid email or password"}), 401
+
+# --- END AUTHENTICATION ROUTES ---
+
 def search_endpoint():
     data = request.json; o_query = data.get('query'); s_engines = data.get('engines',['google','bing','duckduckgo']); user_serp_key = data.get('user_serpapi_key')
     active_serp_key = user_serp_key or SERVER_SERPAPI_KEY
@@ -240,8 +368,8 @@ def fact_check_endpoint():
             try:
                 generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
                 gemini_response = model.generate_content([sys_prompt, user_prompt],generation_config=generation_config)
-                fc_str = gemini_response.text 
-                print(f"Gemini raw JSON mode response: '{fc_str}'") 
+                fc_str = gemini_response.text
+                print(f"Gemini raw JSON mode response: '{fc_str}'")
             except Exception as e_json_mode:
                 print(f"Gemini JSON mode failed ({e_json_mode}), trying plain text generation and manual parsing.")
                 text_user_prompt_for_gemini = (f"Analyze claim...Format as JSON...Claim: \"{claim_send}\"\n\nContext: \"{ctx_send}\"")
@@ -262,7 +390,7 @@ def fact_check_endpoint():
     except Exception as e:print(f"Error {provider} fact-checking: {type(e).__name__}-{e}");return jsonify({"error":f"Fact-check failed ({provider}):{type(e).__name__}","claim":p_claim}),500
 
 @app.route('/score', methods=['POST'])
-def score_endpoint(): 
+def score_endpoint():
     data=request.get_json();_ = not data and (jsonify({"error":"Invalid JSON"}),400);s_type=data.get('source_type','unknown').lower();b_trust=float(data.get('base_trust',50));r_boost=float(data.get('recency_boost',0));fc_v=data.get('factcheckVerdict','pending').lower();BTS_MAX=60;RMS_MAX=15;FCS_MAX=20;ITA_MAX=10;bts=min(max(b_trust/100*BTS_MAX,0),BTS_MAX);rs=min(max(r_boost/100*RMS_MAX,0),RMS_MAX);fcs_map={"verified":FCS_MAX,"neutral":0,"disputed":-FCS_MAX,"disputed_false":-FCS_MAX,"pending":-2,"lacks_consensus":-int(FCS_MAX*.4),"needs_context":0,"needs_context_format_error":0,"needs_context_ast_eval":0,"needs_context_fallback":0,"service_unavailable":0,"unverifiable":-int(FCS_MAX*.6),"error_parsing":-5,"neutral_unavailable":0,"neutral_parsing_error":0,"neutral_error":0,"error":-5};fcs=fcs_map.get(fc_v,0);itq_map={"government":.8,"academic_institution":.9,"research_publication":.9,"encyclopedia":.7,"news_media_mainstream":.6,"news_opinion_blog_live":.3,"ngo_nonprofit_publication":.5,"ngo_nonprofit_organization":.4,"ngo_nonprofit_general":.2,"corporate_blog_pr_info":.1,"news_media_other_or_blog":-.3,"social_media_platform":-.8,"social_media_platform_video":-.7,"social_media_channel_creator":-.5,"social_blogging_platform_user_pub":-.4,"social_blogging_platform":-.6,"website_general":0.,"unknown_url":-.9,"unknown_other":-.9,"unknown_error_parsing":-1.,"mainstream":.6,"alternative":-.4,"unknown":-.7};tqv=itq_map.get(s_type,0.);ita=tqv*ITA_MAX;tis=bts+rs+fcs+ita;fs=int(round(min(max(tis,0),100)));return jsonify({"intrinsic_credibility_score":fs,"factors":{"base_trust_contribution":round(bts,2),"recency_contribution":round(rs,2),"fact_check_contribution":round(fcs,2),"type_quality_adjustment":round(ita,2)}})
 
 if __name__ == '__main__':
