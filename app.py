@@ -6,7 +6,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from serpapi import SerpApiClient
 from openai import OpenAI 
-import google.generativeai as genai
+import google.generativeai as genai # For future Gemini integration
 import requests 
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
@@ -56,7 +56,7 @@ def fetch_text_from_url(url):
             for el in soup.find_all(el_name): el.decompose()
         main_selectors = ['article','main','[role="main"]','.main-content','.article-body','#content','#main','.post-content','.entry-content','.story-body','.articletext']
         content_element = None
-        # *** CORRECTED SYNTAX FOR THE LOOP ***
+        # *** THIS IS THE CORRECTED SYNTAX ***
         for selector in main_selectors:
             content_element = soup.select_one(selector)
             if content_element: 
@@ -121,7 +121,7 @@ def get_sentiment_and_bias(text_content, ai_provider='openai', user_api_key=None
         if not determined_openai_key: print("[AI SENTIMENT] OpenAI key (user or server) unavailable."); return {"score":0.0,"label":"neutral_key_missing"},{"score":0.0,"label":"neutral_key_missing"}
         current_client = OpenAI(api_key=determined_openai_key)
         try:
-            text_to_analyze = str(text_content)[:1500]; prompt = (f"Analyze sentiment and political bias...Return ONLY valid JSON...Text: \"{text_to_analyze}\"")
+            text_to_analyze = str(text_content)[:1500]; prompt = (f"Analyze sentiment and political bias...Return ONLY valid JSON...Text: \"{text_to_analyze}\"") # Shortened prompt for context
             response = current_client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "system", "content": "Analyze text for sentiment/bias. Respond ONLY with valid JSON as specified."}, {"role": "user", "content": prompt}], temperature=0.1, max_tokens=150)
             analysis_data = json.loads(response.choices[0].message.content.strip())
             return {"score":float(analysis_data.get("sentiment_score",0.0)),"label":analysis_data.get("sentiment_label","neutral").lower()},{"score":0.0,"label":analysis_data.get("bias_label","neutral").lower()}
@@ -131,7 +131,7 @@ def get_sentiment_and_bias(text_content, ai_provider='openai', user_api_key=None
         try:
             genai.configure(api_key=user_api_key); model = genai.GenerativeModel('gemini-1.5-flash-latest')
             text_to_analyze = str(text_content)[:30000] 
-            prompt = (f"Analyze the sentiment and political bias...MUST be JSON... 'sentiment_label', 'sentiment_score', 'bias_label'.\n\nSnippet: \"{text_to_analyze}\"")
+            prompt = (f"Analyze the sentiment and political bias...MUST be JSON... 'sentiment_label', 'sentiment_score', 'bias_label'.\n\nSnippet: \"{text_to_analyze}\"") # Shortened
             generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
             response = model.generate_content(prompt, generation_config=generation_config)
             analysis_data = json.loads(response.text) 
