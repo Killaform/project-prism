@@ -278,7 +278,7 @@ def login():
 
     if user and user.password_hash and bcrypt.check_password_hash(user.password_hash, password):
         # User exists and password matches for an email/password user
-        access_token = create_access_token(identity=user.id) # Create JWT token with user.id as identity
+        access_token = create_access_token(identity=str(user.id)) # CHANGED THIS LINE
         return jsonify(access_token=access_token, user_id=user.id, email=user.email), 200
     elif user and not user.password_hash and user.google_id:
         # User exists but seems to be a Google OAuth user without a local password
@@ -288,6 +288,75 @@ def login():
         return jsonify({"error": "Invalid email or password"}), 401
 
 # --- END AUTHENTICATION ROUTES ---
+
+# --- BEGIN SAVED QUERY ROUTES ---
+
+@app.route('/save_query', methods=['POST'])
+@jwt_required() # Protect this route, only logged-in users can access
+def save_query_route():
+    current_user_id = get_jwt_identity() # Get user_id from JWT
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    query_text = data.get('query_text')
+    selected_engines = data.get('selected_engines') # Expected to be a list
+    perspective = data.get('perspective')
+
+    if not all([query_text, selected_engines, perspective]):
+        return jsonify({"error": "Missing data: query_text, selected_engines, and perspective are required"}), 400
+    
+    if not isinstance(selected_engines, list):
+        return jsonify({"error": "selected_engines must be a list"}), 400
+
+    try:
+        new_saved_query = SavedQuery(
+            user_id=current_user_id,
+            query_text=query_text,
+            selected_engines=selected_engines, # Stored as JSON in DB
+            perspective=perspective
+        )
+        db.session.add(new_saved_query)
+        db.session.commit()
+        return jsonify({
+            "message": "Query saved successfully",
+            "saved_query": {
+                "id": new_saved_query.id,
+                "query_text": new_saved_query.query_text,
+                "selected_engines": new_saved_query.selected_engines,
+                "perspective": new_saved_query.perspective,
+                "created_at": new_saved_query.created_at.isoformat() # Return ISO format for datetime
+            }
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error saving query: {e}")
+        return jsonify({"error": "An error occurred while saving the query."}), 500
+
+@app.route('/my_queries', methods=['GET'])
+@jwt_required() # Protect this route
+def get_my_queries_route():
+    current_user_id = get_jwt_identity() # Get user_id from JWT
+
+    try:
+        user_queries = SavedQuery.query.filter_by(user_id=current_user_id).order_by(SavedQuery.created_at.desc()).all()
+        
+        queries_list = []
+        for q in user_queries:
+            queries_list.append({
+                "id": q.id,
+                "query_text": q.query_text,
+                "selected_engines": q.selected_engines,
+                "perspective": q.perspective,
+                "created_at": q.created_at.isoformat() # Return ISO format for datetime
+            })
+        return jsonify(queries_list), 200
+    except Exception as e:
+        print(f"Error fetching queries: {e}")
+        return jsonify({"error": "An error occurred while fetching your queries."}), 500
+
+# --- END SAVED QUERY ROUTES ---
 
 def search_endpoint():
     data = request.json; o_query = data.get('query'); s_engines = data.get('engines',['google','bing','duckduckgo']); user_serp_key = data.get('user_serpapi_key')
