@@ -605,7 +605,240 @@ def handle_preflight():
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response, 200
 
+@app.route('/classify-perspectives', methods=['POST'])
+def classify_perspectives():
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    results = data.get('results', [])
+    ai_provider = data.get('ai_provider', 'openai')
+    api_key = data.get('api_key')
+    
+    if not results:
+        return jsonify({'error': 'No results to classify'}), 400
+    
+    # For OpenAI, we can use server key as fallback
+    if ai_provider == 'openai':
+        key_to_use = api_key or SERVER_OPENAI_API_KEY
+        if not key_to_use:
+            return jsonify({'error': 'No OpenAI API key available'}), 400
+    elif ai_provider == 'gemini':
+        key_to_use = api_key
+        if not key_to_use:
+            return jsonify({'error': 'No Gemini API key provided'}), 400
+    else:
+        return jsonify({'error': 'Invalid AI provider specified'}), 400
+    
+    classified_results = []
+    
+    try:
+        # Process in batches to avoid token limits
+        batch_size = 5
+        for i in range(0, len(results), batch_size):
+            batch = results[i:i+batch_size]
+            
+            if ai_provider == 'openai':
+                batch_classified = classify_with_openai(batch, key_to_use)
+                classified_results.extend(batch_classified)
+            else:
+                # Implement Gemini classification later
+                # For now, use the same OpenAI function with fallback to rule-based
+                batch_classified = classify_with_openai(batch, key_to_use)
+                classified_results.extend(batch_classified)
+        
+        return jsonify({'results': classified_results})
+    except Exception as e:
+        print(f"Error classifying perspectives: {e}")
+        # On error, return the original results with rule-based classification
+        for result in results:
+            url = result.get('link', '').lower()
+            title = result.get('title', '').lower()
+            result['perspective'] = infer_perspective_from_url_and_title(url, title)
+        
+        return jsonify({'results': results})
+
+def classify_with_openai(results, api_key):
+    client = OpenAI(api_key=api_key)
+    
+    # Enhanced prompt with clearer distinction between categories and more specific guidance
+    prompt = """
+    You are a media bias analyst specializing in identifying the perspective of information sources.
+    
+    Classify each search result into ONE of these perspective categories:
+    
+    1. "mainstream": 
+       - Major news networks (e.g., CNN, BBC, NYT, Washington Post, Reuters, AP)
+       - Government official websites (.gov, .mil domains, statements from official bodies)
+       - Established international health organizations (e.g., WHO, CDC, EMA)
+       - University websites and reputable academic publications/journals (.edu domains, e.g., Nature, Science, The Lancet)
+       - Content that presents widely accepted scientific consensus or official positions
+       - Reports from well-known, broadly trusted institutions or think tanks with transparent funding and methodology.
+    
+    2. "alternative": 
+       - Sources presenting strong contrarian views to established scientific consensus or official government/health narratives (e.g., questioning vaccine safety/efficacy based on non-mainstream interpretations, promoting unverified treatments).
+       - Sites promoting unconventional or suppressed theories regarding major events or scientific topics.
+       - Commentary sites with a clear, often aggressively stated, agenda against mainstream institutions or narratives.
+       - Sources that consistently challenge or allege suppression/conspiracy by mainstream media, governments, or scientific bodies.
+       - Content featuring theories often labeled as "conspiracy," "fringe," or "misinformation" by mainstream fact-checkers or authorities.
+       - Sites using highly emotive or sensationalist language to dispute widely accepted facts or expert consensus.
+       - Platforms emphasizing "uncensored truths," "what they don't want you to know," or "the hidden story."
+    
+    3. "neutral": 
+       - Purely factual educational content from recognized, unbiased educational providers.
+       - Reference materials like encyclopedias (e.g., Wikipedia, Britannica), dictionaries, or comprehensive, non-partisan databases.
+       - Strictly data-driven resources with minimal interpretation or opinionated framing.
+       - Technical documentation or specifications.
+       - Primary research papers presented without significant political or ideological framing in their abstract/snippet (the content itself might be debated later, but the presentation is neutral).
+       - Balanced news reports that clearly present multiple sides of an issue without overtly favoring one.
+    
+    For EACH search result, analyze:
+    1. The URL (consider domain reputation, TLDs like .org, .gov, .edu vs commercial or obscure sites, known bias of the domain)
+    2. The title (look for emotional/loaded language, sensationalism, claims of exclusivity or suppression)
+    3. The snippet (identify bias markers, type of language used - e.g., scientific/academic vs opinionated/polemic, presence of unsubstantiated claims)
+    
+    Return ONLY valid JSON with the original results that include the perspective field. Ensure the output is a single JSON array.
+    """
+    
+    # Format results for the prompt with examples
+    results_str = json.dumps(results[:15], indent=2)  # Limit to avoid token issues
+    
+    example_json = """
+    [
+      {
+        "title": "CDC Reports New COVID-19 Statistics and Prevention Guidelines",
+        "link": "https://www.cdc.gov/coronavirus/2019-ncov/index.html",
+        "snippet": "The CDC provides updated information on COVID-19 cases, vaccines, and prevention measures for the public.",
+        "perspective": "mainstream"
+      },
+      {
+        "title": "The Hidden Truth About COVID Vaccines The Government Won't Tell You",
+        "link": "https://www.alternative-health-news.com/covid-vaccines-danger",
+        "snippet": "Shocking revelations about the dangers of COVID vaccines that mainstream media and government agencies are covering up.",
+        "perspective": "alternative"
+      },
+      {
+        "title": "COVID-19 - Wikipedia",
+        "link": "https://en.wikipedia.org/wiki/COVID-19",
+        "snippet": "Coronavirus disease 2019 (COVID-19) is a contagious disease caused by the virus SARS-CoV-2. The first known case was identified in Wuhan, China, in December 2019.",
+        "perspective": "neutral"
+      }
+    ]
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f"Here's an example of correctly classified results in JSON format:\n{example_json}\n\nNow classify these results and return as JSON:\n{results_str}"}
+            ],
+            temperature=0.1,
+            max_tokens=2500,
+            response_format={"type": "json_object"}
+        )
+        
+        classified_data = json.loads(response.choices[0].message.content)
+        
+        # Handle chunking for large result sets
+        classified_results = []
+        if isinstance(classified_data, list):
+            classified_results = classified_data
+        elif 'results' in classified_data:
+            classified_results = classified_data['results']
+            
+        # Combine with any results that weren't in the first chunk
+        if len(results) > 15:
+            for result in results[15:]:
+                # Try to infer classification from URL and title for remaining items
+                perspective = infer_perspective_from_url_and_title(result.get('link', ''), result.get('title', ''))
+                result['perspective'] = perspective
+                classified_results.append(result)
+        
+        return classified_results
+    except Exception as e:
+        print(f"OpenAI classification error: {e}")
+        # Fallback: use simple rules to classify
+        for result in results:
+            url = result.get('link', '').lower()
+            title = result.get('title', '').lower()
+            
+            result['perspective'] = infer_perspective_from_url_and_title(url, title)
+        
+        return results
+
+def infer_perspective_from_url_and_title(url, title):
+    """Simple rule-based fallback classifier"""
+    url = url.lower() if url else ''
+    title = title.lower() if title else ''
+    
+    # Government, educational, or major health organizations
+    if any(domain in url for domain in ['.gov', '.edu', 'who.int', 'cdc.gov', 'nih.gov', '.un.org']):
+        return 'mainstream'
+    
+    # Major news outlets (expanded list for robustness)
+    mainstream_news_domains = [
+        'bbc.', 'cnn.', 'nytimes.', 'washingtonpost.', 'reuters.', 'apnews.', 
+        'nbcnews.', 'abcnews.', 'cbsnews.', 'theguardian.', 'wsj.', 'economist.',
+        'npr.org', 'pbs.org', 'usatoday.', 'bloomberg.', 'forbes.', 'politico.', 'axios.'
+    ]
+    if any(outlet in url for outlet in mainstream_news_domains):
+        return 'mainstream'
+    
+    # Wikipedia and similar reference sites
+    if 'wikipedia.org' in url or 'britannica.com' in url or 'snopes.com' in url or 'factcheck.org' in url:
+        return 'neutral'
+    
+    # Keywords suggesting alternative perspectives (expanded)
+    alternative_keywords = [
+        'conspiracy', 'truth', 'alternative', 'freedom', 'patriot', 'liberty',
+        'exposed', 'reveal', 'scandal', 'coverup', 'natural news', 'infowars',
+        'shocking', 'they don\'t want you to know', 'banned', 'censored',
+        'holistic approach', 'natural immunity', 'medical freedom', 'health freedom',
+        'suppressed science', 'the real story', 'unreported', 'controversial study',
+        'uncensored', 'deep state', 'globalist', 'great reset', 'agenda 21', 'agenda 2030',
+        'plandemic', 'scamdemic', 'big pharma', 'big tech', 'hidden', 'secret', 'they lied'
+    ]
+    if any(term in url or term in title for term in alternative_keywords):
+        return 'alternative'
+    
+    # Scientific and academic journals (often mainstream or neutral depending on interpretation context)
+    academic_journal_domains = [
+        'nature.com', 'science.org', 'nejm.org', 'bmj.com', 'thelancet.com',
+        'cell.com', 'pubmed', 'sciencedirect', 'springer', 'wiley', 'oxfordjournals.org',
+        'jamanetwork.com', 'arxiv.org', 'plos.org', 'frontiersin.org'
+    ]
+    if any(term in url for term in academic_journal_domains):
+        # Could be neutral if it's just the paper, or mainstream if it's an editorial supporting consensus
+        # For simplicity in rule-based, let's lean neutral/mainstream if not caught by alternative keywords
+        if not any(alt_kw in title for alt_kw in ['controversial', 'disputed', 'alternative view']):
+             return 'mainstream' # Or 'neutral' - this is debatable for a simple rule
+    
+    # Check for keywords in title that suggest alternative viewpoint (expanded)
+    alternative_title_phrases = [
+        'what they aren\'t telling you', 'the truth about', 'what doctors won\'t say',
+        'doctors are silent', 'big-pharma agenda', 'media won\'t show you',
+        'the untold story of', 'hidden agenda', 'the great awakening', 'red pill'
+    ]
+    if any(phrase in title for phrase in alternative_title_phrases):
+        return 'alternative'
+    
+    # Additional patterns for mainstream content
+    if re.search(r'official|report|study|research|analysis|guidelines|statement from|university study|government report', title, re.I) and not any(alt_kw in title for alt_kw in alternative_keywords + alternative_title_phrases):
+        return 'mainstream'
+    
+    # Default to neutral if no clear signals
+    return 'neutral'
+
 if __name__ == '__main__':
-    port = int(os.getenv("FLASK_PORT", 5001))
-    print(f"Flask app attempting to start on port {port}...")
-    app.run(debug=True, port=port)
+    # Make sure database tables are created before running the app
+    with app.app_context():
+        try:
+            db.create_all()
+            print("Database tables created successfully!")
+        except Exception as e:
+            print(f"Error creating database tables: {e}")
+    
+    # Run the Flask server on port 5001 to match frontend expectations
+    print("Starting Flask server on http://127.0.0.1:5001")
+    app.run(host='0.0.0.0', port=5001, debug=True)

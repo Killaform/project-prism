@@ -1,6 +1,6 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
 
-export const searchAPI = async (query, engines, perspective, serpApiKey, token) => {
+export const searchAPI = async (query, engines, perspective, serpApiKey, token, aiProvider = 'openai') => {
   const headers = {
     'Content-Type': 'application/json'
   };
@@ -16,7 +16,8 @@ export const searchAPI = async (query, engines, perspective, serpApiKey, token) 
       query: query,
       engines: engines,
       perspective: perspective,
-      serpapi_key: serpApiKey
+      serpapi_key: serpApiKey,
+      ai_provider_override: aiProvider
     }),
   });
   
@@ -115,4 +116,30 @@ export const scoreAPI = async (sourceType, baseTrust, recencyBoost, factcheckVer
   }
   
   return await response.json();
+};
+
+export const classifyPerspectives = async (results, aiProvider, apiKey) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/classify-perspectives`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        results,
+        ai_provider: aiProvider,
+        api_key: apiKey
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.results;
+  } catch (error) {
+    console.error('Error classifying perspectives:', error);
+    return results;
+  }
 };

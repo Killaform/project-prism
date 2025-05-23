@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, FileText, CheckCircle, Clock, Award, AlertTriangle } from 'lucide-react';
+import { FileText, Award, CheckCircle, AlertTriangle } from 'lucide-react'; // Added missing icon imports
 
 const SearchResultItem = ({ 
     result, 
@@ -21,6 +21,7 @@ const SearchResultItem = ({
     };
     
     const getSourceDisplay = (sourceType) => {
+        // This function uses FileText and Award icons, which are now imported.
         switch(sourceType) {
             case 'news': return { label: 'News Media', icon: <FileText size={14} className="mr-1" /> };
             case 'mainstream_news': return { label: 'Mainstream News', icon: <Award size={14} className="mr-1" /> };
@@ -37,22 +38,34 @@ const SearchResultItem = ({
     
     const sourceDisplay = getSourceDisplay(result.source_type_label);
     
-    // Handle fact check verdict styling
     const getVerdictStyle = (verdict) => {
-        switch(verdict?.toLowerCase()) {
+        const rawVerdict = verdict?.toLowerCase();
+        const verdictMap = {
+            'verified': 'Verified',
+            'false': 'False',
+            'partially_true': 'Partially True',
+            'disputed': 'Disputed',
+            'disputed_false': 'Disputed (False)',
+            'lacks_consensus': 'Lacks Consensus',
+            'unverifiable': 'Unverifiable'
+        };
+        const displayVerdict = verdictMap[rawVerdict] || verdict;
+        
+        // This function uses CheckCircle and AlertTriangle icons, which are now imported.
+        switch(rawVerdict) {
             case 'verified':
-                return { color: 'text-green-600', icon: <CheckCircle size={16} className="mr-1 text-green-600" /> };
+                return { color: 'text-green-600', icon: <CheckCircle size={16} className="mr-1 text-green-600" />, displayText: displayVerdict };
             case 'false':
-                return { color: 'text-red-600', icon: <AlertTriangle size={16} className="mr-1 text-red-600" /> };
+                return { color: 'text-red-600', icon: <AlertTriangle size={16} className="mr-1 text-red-600" />, displayText: displayVerdict };
             case 'disputed':
             case 'disputed_false':
-                return { color: 'text-orange-600', icon: <AlertTriangle size={16} className="mr-1 text-orange-600" /> };
+                return { color: 'text-orange-600', icon: <AlertTriangle size={16} className="mr-1 text-orange-600" />, displayText: displayVerdict };
             case 'lacks_consensus':
-                return { color: 'text-yellow-600', icon: <AlertTriangle size={16} className="mr-1 text-yellow-600" /> };
+                return { color: 'text-yellow-600', icon: <AlertTriangle size={16} className="mr-1 text-yellow-600" />, displayText: displayVerdict };
             case 'partially_true':
-                return { color: 'text-blue-600', icon: <AlertTriangle size={16} className="mr-1 text-blue-600" /> };
+                return { color: 'text-blue-600', icon: <AlertTriangle size={16} className="mr-1 text-blue-600" />, displayText: displayVerdict };
             default:
-                return { color: 'text-gray-600', icon: <AlertTriangle size={16} className="mr-1 text-gray-600" /> };
+                return { color: 'text-gray-600', icon: <AlertTriangle size={16} className="mr-1 text-gray-600" />, displayText: displayVerdict };
         }
     };
     
@@ -104,7 +117,7 @@ const SearchResultItem = ({
                     <div className={`mt-3 p-3 border rounded-md bg-gray-50 ${verdictStyle.color}`}>
                         <div className="flex items-center font-medium mb-1">
                             {verdictStyle.icon}
-                            <span>Fact Check: {result.fact_check_data.verdict}</span>
+                            <span>Fact Check: {verdictStyle.displayText}</span>
                         </div>
                         <p className="text-sm text-gray-700">
                             {result.fact_check_data.explanation}
@@ -116,7 +129,7 @@ const SearchResultItem = ({
                 {hasSummary && (
                     <div className="mt-3 p-3 border rounded-md bg-gray-50">
                         <div className="flex items-center font-medium mb-1 text-purple-600">
-                            <FileText size={16} className="mr-1" />
+                            <FileText size={16} className="mr-1" /> {/* Icon is now imported */}
                             <span>Summary</span>
                         </div>
                         <p className="text-sm text-gray-700">
@@ -142,7 +155,8 @@ const SearchResultItem = ({
                             </>
                         ) : (
                             <>
-                                <CheckCircle size={14} className="mr-1.5" /> Fact-Check
+                                <CheckCircle size={14} className="mr-1.5" /> {/* Icon is now imported */}
+                                Fact-Check
                             </>
                         )}
                     </button>
@@ -162,7 +176,7 @@ const SearchResultItem = ({
                             </>
                         ) : (
                             <>
-                                <FileText size={12} className="mr-1" />
+                                <FileText size={12} className="mr-1" /> {/* Icon is now imported */}
                                 <span>SUMMARIZE</span>
                             </>
                         )}
