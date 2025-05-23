@@ -77,8 +77,13 @@ const SearchResultItem = ({ result, index, onSummarize, onFactCheck }) => {
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                     <div className="text-sm font-semibold text-gray-800" title="Intrinsic Credibility Score"> Intrinsic Score: <span className="text-xl text-purple-700 font-bold"> {result.intrinsic_credibility_score !== null && result.intrinsic_credibility_score !== undefined ? result.intrinsic_credibility_score : (result.is_scoring_intrinsic ? '...' : 'N/A')}</span> {result.intrinsic_credibility_factors && (<span className="block text-xs text-gray-500 mt-0.5"> (B: {result.intrinsic_credibility_factors.base_trust_contribution}, R: {result.intrinsic_credibility_factors.recency_contribution}, F: {result.intrinsic_credibility_factors.fact_check_contribution}, T: {result.intrinsic_credibility_factors.type_quality_adjustment})</span>)}</div>
                     <div className="flex gap-2 flex-wrap">
-                        <button onClick={() => onSummarize(index)} className="px-3 py-2 text-xs font-semibold text-purple-700 bg-purple-100 rounded-md hover:bg-purple-200 transition-colors duration-150 ease-in-out shadow-sm hover:shadow-md flex items-center"> <FileText size={14} className="mr-1.5" /> Summarize </button>
-                        <button onClick={() => onFactCheck(index)} className="px-3 py-2 text-xs font-semibold text-pink-700 bg-pink-100 rounded-md hover:bg-pink-200 transition-colors duration-150 ease-in-out shadow-sm hover:shadow-md flex items-center"> <CheckCircle size={14} className="mr-1.5" /> Fact-Check </button>
+                        {/* Pass the actual result object instead of the index */}
+                        <button onClick={() => onSummarize(result)} className="px-3 py-2 text-xs font-semibold text-purple-700 bg-purple-100 rounded-md hover:bg-purple-200 transition-colors duration-150 ease-in-out shadow-sm hover:shadow-md flex items-center">
+                            <FileText size={14} className="mr-1.5" /> Summarize
+                        </button>
+                        <button onClick={() => onFactCheck(result)} className="px-3 py-2 text-xs font-semibold text-pink-700 bg-pink-100 rounded-md hover:bg-pink-200 transition-colors duration-150 ease-in-out shadow-sm hover:shadow-md flex items-center">
+                            <CheckCircle size={14} className="mr-1.5" /> Fact-Check
+                        </button>
                     </div>
                 </div>
                 {result.summary && (<div className="mt-3 p-3 bg-purple-50 rounded-md text-sm text-gray-800 shadow-inner"> <h4 className="font-semibold text-purple-700 mb-1">Summary <span className="text-xs font-normal text-gray-500">({result.summarized_from})</span>:</h4> <p className="whitespace-pre-wrap leading-relaxed">{result.summary}</p> </div>)}
@@ -219,33 +224,79 @@ function App() {
     }, [selectedAiProvider, openaiApiKey, geminiApiKey, serpApiKeyUser]);
 
 
-    const calculateIntrinsicScoreForItem = useCallback(async (item, itemIndexInAllResults) => {
-        if (!item) { console.warn(`[FRONTEND] CalcScore: item undefined for index ${itemIndexInAllResults}`); setAllSearchResults(prev => prev.map((r, idx) => idx === itemIndexInAllResults ? { ...r, is_scoring_intrinsic: false, intrinsic_credibility_score: -1 } : r)); return null; }
-        const masterIndex = allSearchResults.findIndex(r => r.link === item.link && r.perspective_query_type === item.perspective_query_type);
-        const targetIndex = masterIndex !== -1 ? masterIndex : itemIndexInAllResults;
-        if (targetIndex === -1) { console.warn(`[FRONTEND] CalcScore: targetIndex -1 for item ${item.link}`); return item; }
-        setAllSearchResults(prev => prev.map((r, idx) => idx === targetIndex ? { ...r, is_scoring_intrinsic: true, needsRescore: false } : r));
-        const payload = { source_type: item.source_type_label || 'unknown', base_trust: item.base_trust || 50, recency_boost: item.recency_boost || 0, factcheckVerdict: item.factcheckVerdict || 'pending' };
-        try {
-            const headers = { 'Content-Type': 'application/json' };
-            if (token) {
-                headers['Authorization'] = `Bearer ${token}`;
-            }
-            const response = await fetch(`${API_BASE_URL}/score`, { 
-                method: 'POST', headers: headers, body: JSON.stringify(payload) 
-            });
-            const scoreData = await response.json();
-            if (!response.ok) throw new Error(scoreData.error || `HTTP error ${response.status}`);
-            const updatedItem = { ...item, intrinsic_credibility_score: scoreData.intrinsic_credibility_score, intrinsic_credibility_factors: scoreData.factors, is_scoring_intrinsic: false };
-            setAllSearchResults(prev => prev.map((r, idx) => idx === targetIndex ? updatedItem : r));
-            return updatedItem;
-        } catch (e) {
-            console.error(`[FRONTEND] Error /score for '${item.title}':`, e.message);
-            const errorItem = { ...item, intrinsic_credibility_score: -1, is_scoring_intrinsic: false };
-            setAllSearchResults(prev => prev.map((r, idx) => idx === targetIndex ? errorItem : r));
-            return errorItem;
+    // Update the score calculation function
+const calculateIntrinsicScoreForItem = useCallback(async (item, itemIndexInAllResults) => {
+    if (!item) { 
+        console.warn(`[FRONTEND] CalcScore: item undefined for index ${itemIndexInAllResults}`); 
+        return null; 
+    }
+    
+    // Create a unique identifier for this item
+    const itemId = `${item.link}-${item.perspective_query_type}`;
+    
+    // Find the current index of the item (which may have changed due to sorting)
+    const masterIndex = allSearchResults.findIndex(r => 
+        `${r.link}-${r.perspective_query_type}` === itemId);
+    const targetIndex = masterIndex !== -1 ? masterIndex : itemIndexInAllResults;
+    
+    if (targetIndex === -1) { 
+        console.warn(`[FRONTEND] CalcScore: targetIndex -1 for item ${item.link}`); 
+        return item; 
+    }
+    
+    // Update the item to show it's being scored
+    setAllSearchResults(prev => prev.map((r, idx) => {
+        const rId = `${r.link}-${r.perspective_query_type}`;
+        return rId === itemId ? { ...r, is_scoring_intrinsic: true, needsRescore: false } : r;
+    }));
+    
+    const payload = { 
+        source_type: item.source_type_label || 'unknown', 
+        base_trust: item.base_trust || 50, 
+        recency_boost: item.recency_boost || 0, 
+        factcheckVerdict: item.factcheckVerdict || 'pending' 
+    };
+    
+    try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
         }
-    }, [allSearchResults, token]);
+        const response = await fetch(`${API_BASE_URL}/score`, { 
+            method: 'POST', headers: headers, body: JSON.stringify(payload) 
+        });
+        const scoreData = await response.json();
+        if (!response.ok) throw new Error(scoreData.error || `HTTP error ${response.status}`);
+        
+        // Update the item with the score results
+        setAllSearchResults(prev => prev.map(r => {
+            const rId = `${r.link}-${r.perspective_query_type}`;
+            return rId === itemId ? { 
+                ...r, 
+                intrinsic_credibility_score: scoreData.intrinsic_credibility_score, 
+                intrinsic_credibility_factors: scoreData.factors, 
+                is_scoring_intrinsic: false 
+            } : r;
+        }));
+        
+        return {
+            ...item,
+            intrinsic_credibility_score: scoreData.intrinsic_credibility_score,
+            intrinsic_credibility_factors: scoreData.factors,
+            is_scoring_intrinsic: false
+        };
+    } catch (e) {
+        console.error(`[FRONTEND] Error /score for '${item.title}':`, e.message);
+        
+        // Update the item with error state
+        setAllSearchResults(prev => prev.map(r => {
+            const rId = `${r.link}-${r.perspective_query_type}`;
+            return rId === itemId ? { ...r, intrinsic_credibility_score: -1, is_scoring_intrinsic: false } : r;
+        }));
+        
+        return { ...item, intrinsic_credibility_score: -1, is_scoring_intrinsic: false };
+    }
+}, [allSearchResults, token]);
 
     const calculateAllIntrinsicScores = useCallback(async (resultsToScore) => {
         if (!resultsToScore || resultsToScore.length === 0) return [];
@@ -348,58 +399,117 @@ function App() {
 
     const handlePerspectiveButtonClick = (mode) => { setActiveDisplayPerspective(mode); };
 
-    const handleFactCheck = async (itemOriginalIndex) => {
-        const currentItem = allSearchResults[itemOriginalIndex];
-        if (!currentItem) { console.error("FactCheck: Item not found at index", itemOriginalIndex); return; }
-        setAllSearchResults(prev => prev.map((r, idx) => idx === itemOriginalIndex ? { ...r, factCheck: { claim: currentItem.snippet || currentItem.title, verdict: "checking..." } } : r));
-        try {
-            const payload = {
-                url: currentItem.link,
-                claim: currentItem.snippet || currentItem.title,
-                ai_provider: selectedAiProvider,
-                user_api_key: selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey
-            };
-            const headers = { 'Content-Type': 'application/json' };
-            if (token) {
-                headers['Authorization'] = `Bearer ${token}`;
-            }
-            const response = await fetch(`${API_BASE_URL}/fact-check`, { 
-                method: 'POST', headers: headers, body: JSON.stringify(payload) 
-            });
-            const factCheckData = await response.json();
-            if (!response.ok) throw new Error(factCheckData.error || "Fact-check API error");
-            const itemWithNewFactCheck = { ...currentItem, factCheck: factCheckData, factcheckVerdict: factCheckData.verdict, needsRescore: true };
-            // calculateIntrinsicScoreForItem will use the token from state
-            await calculateIntrinsicScoreForItem(itemWithNewFactCheck, itemOriginalIndex);
-        } catch (e) {
-            console.error("[FRONTEND] Fact-check error:", e.message);
-            setAllSearchResults(prev => prev.map((r, idx) => idx === itemOriginalIndex ? { ...currentItem, factCheck: { claim: currentItem.snippet || currentItem.title, verdict: "error", explanation: e.message } } : r));
+    // Update handleFactCheck to work with the result object directly
+const handleFactCheck = async (currentItem) => {
+    if (!currentItem) { 
+        console.error("FactCheck: Item not provided"); 
+        return; 
+    }
+    
+    // Create a unique identifier for this item
+    const itemId = `${currentItem.link}-${currentItem.perspective_query_type}`;
+    
+    // Debug logging to track which item is being fact-checked
+    console.log(`Fact-checking item: ${currentItem.title} (${itemId})`);
+    
+    setAllSearchResults(prev => prev.map(r => {
+        const rId = `${r.link}-${r.perspective_query_type}`;
+        return rId === itemId 
+            ? { ...r, factCheck: { claim: currentItem.snippet || currentItem.title, verdict: "checking..." } } 
+            : r;
+    }));
+    
+    try {
+        const payload = {
+            url: currentItem.link,
+            claim: currentItem.snippet || currentItem.title,
+            ai_provider: selectedAiProvider,
+            user_api_key: selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey
+        };
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
         }
-    };
-
-    const handleSummarize = async (itemOriginalIndex) => {
-        const resultToSummarize = allSearchResults[itemOriginalIndex];
-        if (!resultToSummarize) return;
-        setAllSearchResults(prev => prev.map((r, idx) => idx === itemOriginalIndex ? { ...r, summary: "Loading..." } : r));
-        try {
-            const payload = {
-                url: resultToSummarize.link,
-                text: resultToSummarize.snippet || resultToSummarize.title,
-                ai_provider: selectedAiProvider,
-                user_api_key: selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey
-            };
-            const headers = { 'Content-Type': 'application/json' };
-            if (token) {
-                headers['Authorization'] = `Bearer ${token}`;
+        const response = await fetch(`${API_BASE_URL}/fact-check`, { 
+            method: 'POST', headers: headers, body: JSON.stringify(payload) 
+        });
+        const factCheckData = await response.json();
+        if (!response.ok) throw new Error(factCheckData.error || "Fact-check API error");
+        
+        // Update the item with the fact check results
+        setAllSearchResults(prev => prev.map(r => {
+            const rId = `${r.link}-${r.perspective_query_type}`;
+            if (rId === itemId) {
+                const updatedItem = { 
+                    ...r, 
+                    factCheck: factCheckData, 
+                    factcheckVerdict: factCheckData.verdict, 
+                    needsRescore: true 
+                };
+                // Schedule a score update for this specific item
+                calculateIntrinsicScoreForItem(updatedItem, prev.findIndex(item => 
+                    `${item.link}-${item.perspective_query_type}` === itemId));
+                return updatedItem;
             }
-            const response = await fetch(`${API_BASE_URL}/summarize`, { 
-                method: 'POST', headers: headers, body: JSON.stringify(payload) 
-            });
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error || "Summarize API error");
-            setAllSearchResults(prev => prev.map((r, idx) => idx === itemOriginalIndex ? { ...r, summary: data.summary, summarized_from: data.summarized_from } : r));
-        } catch (e) { console.error("Summarization error:", e.message); setAllSearchResults(prev => prev.map((r, idx) => idx === itemOriginalIndex ? { ...r, summary: `Error: ${e.message}` } : r)); }
-    };
+            return r;
+        }));
+    } catch (e) {
+        console.error("[FRONTEND] Fact-check error:", e.message);
+        setAllSearchResults(prev => prev.map(r => {
+            const rId = `${r.link}-${r.perspective_query_type}`;
+            return rId === itemId 
+                ? { ...r, factCheck: { claim: currentItem.snippet || currentItem.title, verdict: "error", explanation: e.message } } 
+                : r;
+        }));
+    }
+};
+
+    // Update handleSummarize to work with the result object directly
+const handleSummarize = async (resultToSummarize) => {
+    if (!resultToSummarize) return;
+    
+    // Create a unique identifier for this item
+    const itemId = `${resultToSummarize.link}-${resultToSummarize.perspective_query_type}`;
+    
+    // Debug logging
+    console.log(`Summarizing item: ${resultToSummarize.title} (${itemId})`);
+    
+    setAllSearchResults(prev => prev.map(r => {
+        const rId = `${r.link}-${r.perspective_query_type}`;
+        return rId === itemId ? { ...r, summary: "Loading..." } : r;
+    }));
+    
+    try {
+        const payload = {
+            url: resultToSummarize.link,
+            text: resultToSummarize.snippet || resultToSummarize.title,
+            ai_provider: selectedAiProvider,
+            user_api_key: selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey
+        };
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        const response = await fetch(`${API_BASE_URL}/summarize`, { 
+            method: 'POST', headers: headers, body: JSON.stringify(payload) 
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Summarize API error");
+        
+        setAllSearchResults(prev => prev.map(r => {
+            const rId = `${r.link}-${r.perspective_query_type}`;
+            return rId === itemId 
+                ? { ...r, summary: data.summary, summarized_from: data.summarized_from } 
+                : r;
+        }));
+    } catch (e) {
+        console.error("Summarization error:", e.message);
+        setAllSearchResults(prev => prev.map(r => {
+            const rId = `${r.link}-${r.perspective_query_type}`;
+            return rId === itemId ? { ...r, summary: `Error: ${e.message}` } : r;
+        }));
+    }
+};
 
     const handleKeyDown = (event) => { if (event.key === 'Enter') handleSearch(); };
     const handleEngineChange = (engine) => { setSelectedEngines(prev => ({ ...prev, [engine]: !prev[engine] })); };
@@ -598,7 +708,7 @@ function App() {
         return () => window.removeEventListener('message', handleDirectAuth);
     }, []);
 
-    // Add this helper function near the top of your file
+    // Add this helper function near the top of the file
 const parseJwt = (token) => {
   try {
     return JSON.parse(atob(token.split('.')[1]));
@@ -831,18 +941,17 @@ useEffect(() => {
 
                 {!isLoading && !isProcessing && !error && displayedResults.length > 0 && (
                     <div className="search-results-list space-y-6">
-                        {displayedResults.map((result) => {
-                            const originalIndex = allSearchResults.findIndex(item => item.link === result.link && item.perspective_query_type === result.perspective_query_type);
-                            return (
-                                <SearchResultItem
-                                    key={result.link + '-' + (result.perspective_query_type || 'na')} /* More stable key */
-                                    result={result}
-                                    index={originalIndex !== -1 ? originalIndex : displayedResults.indexOf(result)}
-                                    onSummarize={handleSummarize}
-                                    onFactCheck={handleFactCheck}
-                                />
-                            );
-                        })}
+                        {displayedResults.map((result, index) => (
+                            <SearchResultItem 
+                                key={`${result.link}-${result.perspective_query_type}-${index}`} 
+                                result={result}
+                                index={index}  // Pass the index explicitly
+                                onFactCheck={handleFactCheck}
+                                onSummarize={handleSummarize}
+                                selectedAiProvider={selectedAiProvider}
+                                aiApiKey={selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey}
+                            />
+                        ))}
                     </div>
                 )}
             </main>
