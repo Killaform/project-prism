@@ -1,30 +1,53 @@
 import React from 'react';
-import { Users, Globe, Shield } from 'lucide-react';
+import { Scale, Newspaper, AlertTriangle } from 'lucide-react';
 
 const PerspectiveFilter = ({ activeDisplayPerspective, handlePerspectiveButtonClick }) => {
-  const getButtonClass = (mode) =>
-    `px-4 py-2 rounded-lg font-medium transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 ${
-      activeDisplayPerspective === mode
-        ? 'bg-purple-600 text-white shadow-lg scale-105'
-        : 'bg-gray-200 text-gray-700 hover:bg-gray-300 hover:shadow-md'
-    }`;
-
   return (
-    <div>
-      <p className="text-md font-semibold text-gray-700 mb-3">Select Perspective View:</p>
-      <div className="flex flex-wrap gap-4">
-        <button onClick={() => handlePerspectiveButtonClick('fringe')} className={getButtonClass('fringe')}>
-          <Users size={18} className="mr-2" /> Fringe / Alt
+    <div className="flex flex-col sm:flex-row justify-center">
+      <div className="inline-flex" role="group">
+        <button
+          type="button"
+          onClick={() => handlePerspectiveButtonClick('balanced')}
+          className={`px-4 py-2 text-sm font-medium border border-gray-300 flex items-center justify-center rounded-l-md ${
+            activeDisplayPerspective === 'balanced'
+              ? 'bg-purple-600 text-white border-purple-600'
+              : 'bg-white text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          <Scale size={16} className="mr-2" />
+          BALANCED
         </button>
-        <button onClick={() => handlePerspectiveButtonClick('balanced')} className={getButtonClass('balanced')}>
-          <Globe size={18} className="mr-2" /> Balanced / All
+        <button
+          type="button"
+          onClick={() => handlePerspectiveButtonClick('mainstream')}
+          className={`px-4 py-2 text-sm font-medium border-t border-b border-gray-300 flex items-center justify-center ${
+            activeDisplayPerspective === 'mainstream'
+              ? 'bg-purple-600 text-white border-t-purple-600 border-b-purple-600'
+              : 'bg-white text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          <Newspaper size={16} className="mr-2" />
+          MAINSTREAM
         </button>
-        <button onClick={() => handlePerspectiveButtonClick('mainstream')} className={getButtonClass('mainstream')}>
-          <Shield size={18} className="mr-2" /> Mainstream
+        <button
+          type="button"
+          onClick={() => handlePerspectiveButtonClick('fringe')}
+          className={`px-4 py-2 text-sm font-medium border border-gray-300 flex items-center justify-center rounded-r-md ${
+            activeDisplayPerspective === 'fringe'
+              ? 'bg-purple-600 text-white border-purple-600'
+              : 'bg-white text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          <AlertTriangle size={16} className="mr-2" />
+          ALTERNATIVE
         </button>
+      </div>
+      <div className="mt-3 sm:mt-0 sm:ml-4 text-xs text-gray-500 text-center sm:text-left font-mono">
+        // FILTER RESULTS BY PERSPECTIVE TYPE
       </div>
     </div>
   );
 };
 
 export default PerspectiveFilter;
+

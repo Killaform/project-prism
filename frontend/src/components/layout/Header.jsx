@@ -1,45 +1,52 @@
 import React from 'react';
-import { LogIn, LogOut, Settings } from 'lucide-react';
+import { LogOut, Settings, LogIn } from 'lucide-react';
 import logoSrc from '../../assets/logo.png';
 
 const Header = ({ currentUser, onLogout, onLoginClick, onSettingsClick }) => {
   return (
-    <header className="bg-white/80 backdrop-blur-md shadow-lg sticky top-0 z-50">
-      <div className="container mx-auto px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center">
-          <img src={logoSrc} alt="Perspective Engine Logo" className="h-[75px] w-auto" />
+    <header className="bg-white border-b border-gray-200 shadow-sm py-3 px-6">
+      <div className="container mx-auto flex flex-col items-center md:flex-row md:justify-between">
+        <div className="flex items-center justify-center w-full md:w-auto mb-4 md:mb-0">
+          <img 
+            src={logoSrc} 
+            alt="PERSPECTIVE ENGINE" 
+            className="h-14" 
+          />
         </div>
-        <div className="flex items-center space-x-3">
+        
+        <div className="flex items-center space-x-4">
+          <button
+            onClick={onSettingsClick}
+            className="text-purple-600 hover:text-purple-800 transition-colors p-2"
+            title="API Settings"
+          >
+            <Settings size={20} />
+          </button>
+          
           {currentUser ? (
-            <>
-              <span className="text-sm text-gray-700 hidden sm:inline">
-                Welcome, <span className="font-semibold text-purple-700">{currentUser.email}</span>
+            <div className="flex items-center space-x-3">
+              <span className="text-gray-900 hidden sm:inline font-mono">
+                {currentUser.email || currentUser.name}
               </span>
               <button
                 onClick={onLogout}
-                className="text-gray-600 hover:text-red-600 p-2 rounded-full hover:bg-red-100 transition-colors flex items-center text-sm"
-                title="Logout"
+                className="flex items-center space-x-1 text-white bg-purple-600 hover:bg-purple-700 px-3 py-1.5 rounded-md transition-colors"
+                title="Log out"
               >
-                <LogOut size={20} className="mr-1 sm:mr-0" />
-                <span className="sm:hidden ml-1">Logout</span>
+                <LogOut size={16} />
+                <span>Logout</span>
               </button>
-            </>
+            </div>
           ) : (
             <button
               onClick={onLoginClick}
-              className="text-gray-600 hover:text-purple-700 p-2 rounded-full hover:bg-purple-100 transition-colors flex items-center text-sm"
-              title="Login or Register"
+              className="flex items-center space-x-1 text-white bg-purple-600 hover:bg-purple-700 px-3 py-1.5 transition-colors uppercase font-sans font-medium tracking-wide"
+              title="Log in"
             >
-              <LogIn size={20} className="mr-1" /> Login / Register
+              <LogIn size={16} />
+              <span>Login</span>
             </button>
           )}
-          <button
-            onClick={onSettingsClick}
-            className="text-gray-600 hover:text-purple-700 p-2 rounded-full hover:bg-purple-100 transition-colors"
-            title="API Settings"
-          >
-            <Settings size={24} />
-          </button>
         </div>
       </div>
     </header>

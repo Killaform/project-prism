@@ -1,13 +1,13 @@
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useCallback } from 'react';
 import { parseJwt, isTokenExpired } from '../services/auth';
 
 export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const [token, setToken] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  
+  const [token, setToken] = useState(localStorage.getItem('token'));
+
   useEffect(() => {
     // Check for token in localStorage
     const storedToken = localStorage.getItem('perspectiveEngineToken');
@@ -32,27 +32,26 @@ export const AuthProvider = ({ children }) => {
     setLoading(false);
   }, []);
   
-  const login = (newToken, userData) => {
-    setToken(newToken);
+  // Login handler
+  const login = useCallback((userData, authToken) => {
     setCurrentUser(userData);
-    localStorage.setItem('perspectiveEngineToken', newToken);
-    localStorage.setItem('perspectiveEngineUser', JSON.stringify(userData));
-  };
-  
-  const logout = () => {
-    setToken(null);
+    setToken(authToken);
+    localStorage.setItem('token', authToken);
+  }, []);
+
+  // Logout handler
+  const logout = useCallback(() => {
     setCurrentUser(null);
-    localStorage.removeItem('perspectiveEngineToken');
-    localStorage.removeItem('perspectiveEngineUser');
-  };
+    setToken(null);
+    localStorage.removeItem('token');
+  }, []);
   
   return (
     <AuthContext.Provider value={{ 
-      token, 
       currentUser, 
-      login, 
-      logout, 
-      isAuthenticated: !!token,
+      token,
+      login,
+      logout,
       loading
     }}>
       {children}
