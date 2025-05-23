@@ -48,14 +48,12 @@ export const factCheckAPI = async (url, claim, aiProvider, apiKey, token) => {
       }) 
     });
     
-    const data = await response.json();
-    
     if (!response.ok) {
-      console.error("Fact-check API error:", response.status, data);
-      throw new Error(data.error || `Fact-check failed with status ${response.status}`);
+      const errorData = await response.json();
+      throw new Error(errorData.error || `Fact-check failed with status ${response.status}`);
     }
     
-    return data;
+    return await response.json();
   } catch (error) {
     console.error("Fact-check request failed:", error);
     throw error;
@@ -69,23 +67,28 @@ export const summarizeAPI = async (url, text, aiProvider, apiKey, token) => {
     headers['Authorization'] = `Bearer ${token}`;
   }
   
-  const response = await fetch(`${API_BASE_URL}/summarize`, { 
-    method: 'POST', 
-    headers: headers, 
-    body: JSON.stringify({
-      url: url,
-      text: text,
-      ai_provider: aiProvider,
-      user_api_key: apiKey
-    }) 
-  });
-  
-  if (!response.ok) {
-    const data = await response.json();
-    throw new Error(data.error || "Summarize API error");
+  try {
+    const response = await fetch(`${API_BASE_URL}/summarize`, { 
+      method: 'POST', 
+      headers: headers, 
+      body: JSON.stringify({
+        url: url,
+        text: text,
+        ai_provider: aiProvider,
+        user_api_key: apiKey
+      }) 
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || "Summarize API error");
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error("Summarize request failed:", error);
+    throw error;
   }
-  
-  return await response.json();
 };
 
 export const scoreAPI = async (sourceType, baseTrust, recencyBoost, factcheckVerdict, token) => {

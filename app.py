@@ -345,29 +345,139 @@ def search_endpoint():
 
 @app.route('/summarize', methods=['POST'])
 def summarize_endpoint():
-    data = request.json; provider = data.get('ai_provider','openai'); key = data.get('user_api_key'); text_fb = data.get('text'); url = data.get('url')
-    if not url and not text_fb: return jsonify({"error":"URL or text required"}),400
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+        
+    provider = data.get('ai_provider', 'openai')
+    key = data.get('user_api_key')
+    text_fb = data.get('text')
+    url = data.get('url')
+
+    if not url and not text_fb:
+        return jsonify({"error": "URL or text required"}), 400
+    
     determined_key = key or (SERVER_OPENAI_API_KEY if provider == 'openai' else None)
-    if provider=='openai'and not determined_key: return jsonify({"error":"OpenAI key (user or server) unavailable."}),503
-    if provider=='gemini'and not key: return jsonify({"error":"Gemini API key not provided."}),503
-    content=text_fb or "";src="snippet/title"
-    if url: ext=fetch_text_from_url(url)
-    if url and ext: content=ext;src="fetched URL content"
-    elif url and not ext and text_fb:print(f"Summarize: Failed URL fetch {url}, using fallback.");
-    elif url and not ext and not text_fb:print(f"Summarize: Failed URL fetch {url}, no fallback.");
-    if not content.strip(): return jsonify({"error":"No content to summarize."}),400
+    if provider == 'openai' and not determined_key:
+        return jsonify({"error": "OpenAI API key unavailable."}), 503
+    if provider == 'gemini' and not key:
+        return jsonify({"error": "Gemini API key unavailable."}), 503
+    
+    content = text_fb or ""
+    src = "snippet/title"
+    
+    if url:
+        ext = fetch_text_from_url(url)
+        if ext:
+            content = ext
+            src = "fetched URL content"
+        elif not ext and text_fb:
+            print(f"Summarize: Failed URL fetch {url}, using fallback.")
+        elif not ext and not text_fb:
+            print(f"Summarize: Failed URL fetch {url}, no fallback.")
+            return jsonify({"error": "Could not fetch URL content and no fallback text provided"}), 400
+    
+    if not content.strip():
+        return jsonify({"error": "No content to summarize."}), 400
+    
     print(f"Summarize ({provider}): Content from {src} (len: {len(content)})")
+    
     try:
-        c_send=content[:8000];summary_text="Error processing summary."
-        if provider=='openai':
-            client_to_use=OpenAI(api_key=determined_key)
-            resp=client_to_use.chat.completions.create(model="gpt-3.5-turbo",messages=[{"role":"system","content":"Summarize (3-5 sentences)."},{"role":"user","content":f"Summarize:\n\n{c_send}"}],max_tokens=250,temperature=.3)
-            summary_text=resp.choices[0].message.content.strip()
-        elif provider=='gemini':
-            genai.configure(api_key=key);model=genai.GenerativeModel('gemini-1.5-flash-latest')
-            resp=model.generate_content(f"Summarize this text concisely (3-5 sentences):\n\n{c_send}");summary_text=resp.text.strip()
-        return jsonify({"summary":summary_text,"summarized_from":src})
-    except Exception as e:print(f"Error {provider} summarization: {type(e).__name__}-{e}");return jsonify({"error":f"Summarize failed ({provider}):{type(e).__name__}"}),500
+        c_send = content[:8000]  # Limit content to avoid token limits
+        
+        if provider == 'openai':
+            openai_client = OpenAI(api_key=determined_key)
+            resp = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Summarize the following text in 3-5 clear, informative sentences."},
+                    {"role": "user", "content": f"Summarize:\n\n{c_send}"}
+                ],
+                max_tokens=250,
+                temperature=0.3
+            )
+            summary_text = resp.choices[0].message.content.strip()
+        
+        elif provider == 'gemini':
+            import google.generativeai as genai
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            prompt = f"Summarize this text in 3-5 sentences:\n\n{c_send}"
+            response = model.generate_content(prompt)
+            summary_text = response.text
+        
+        return jsonify({"summary": summary_text, "summarized_from": src})
+    
+    except Exception as e:
+        print(f"Error {provider} summarization: {type(e).__name__}-{e}")
+        return jsonify({"error": f"Summarization error: {str(e)}"}), 500
+
+
+@app.route('/fact-check', methods=['POST'])
+def fact_check():
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+        
+    provider = data.get('ai_provider', 'openai')
+    key = data.get('user_api_key')
+    claim_fb = data.get('claim')
+    url = data.get('url')
+
+    if not url and not claim_fb:
+        return jsonify({"error": "URL or claim required"}), 400
+    
+    determined_key = key or (SERVER_OPENAI_API_KEY if provider == 'openai' else None)
+    if provider == 'openai' and not determined_key:
+        return jsonify({"error": "OpenAI API key unavailable."}), 503
+    if provider == 'gemini' and not key:
+        return jsonify({"error": "Gemini API key unavailable."}), 503
+    
+    context = claim_fb or ""
+    src_ctx = "snippet/title"
+    p_claim = claim_fb or ""
+    
+    if url:
+        ext = fetch_text_from_url(url)
+        if ext:
+            context = ext
+            src_ctx = "fetched URL content"
+        elif not ext and claim_fb:
+            print(f"Fact-check: Failed URL fetch {url}, using fallback.")
+        elif not ext and not claim_fb:
+            print(f"Fact-check: Failed URL fetch {url}, no fallback.")
+            return jsonify({"error": "Could not fetch URL content and no fallback claim provided"}), 400
+    
+    if not p_claim.strip() and context.strip():
+        p_claim = context[:300]
+    
+    if not p_claim.strip() and not context.strip():
+        return jsonify({"error": "No claim or context to fact-check"}), 400
+    
+    if not p_claim.strip():
+        p_claim = "Evaluate general credibility of provided context."
+    
+    print(f"Fact-check ({provider}): Claim '{p_claim[:100]}...' context from {src_ctx} (len: {len(context)})")
+    
+    try:
+        if provider == 'openai':
+            verdict, explanation = fact_check_with_openai(p_claim, context, determined_key)
+        elif provider == 'gemini':
+            verdict, explanation = fact_check_with_gemini(p_claim, context, key)
+        else:
+            return jsonify({"error": f"Unsupported AI provider: {provider}"}), 400
+        
+        return jsonify({
+            "claim": p_claim,
+            "verdict": verdict,
+            "explanation": explanation,
+            "source": f"AI Analysis ({provider.capitalize()}, Context: {src_ctx})"
+        })
+    
+    except Exception as e:
+        print(f"Error {provider} fact-checking: {type(e).__name__}-{e}")
+        return jsonify({"error": f"Fact-checking error: {str(e)}"}), 500
+
 
 def fact_check_with_openai(claim, content, api_key):
     """
@@ -377,16 +487,14 @@ def fact_check_with_openai(claim, content, api_key):
         client = OpenAI(api_key=api_key)
         
         # Prepare context and claim
-        # Limit content length to avoid token limits
         limited_content = content[:8000] if content else "No content available"
         
         prompt = f"""
         Fact check the following claim based on the provided content. 
         Return ONLY a JSON object with the following fields:
-        - "claim": the original claim being verified
         - "verdict": one of ["verified", "false", "partially_true", "disputed", "lacks_consensus", "unverifiable"]
         - "explanation": a brief explanation of your verdict
-        
+
         Claim: "{claim}"
         
         Content to check against:
@@ -395,157 +503,81 @@ def fact_check_with_openai(claim, content, api_key):
         
         # Call the OpenAI API
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a fact-checking assistant. Return ONLY a valid JSON object with the specified fields."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.1,
-            max_tokens=500
+            max_tokens=500,
+            response_format={"type": "json_object"}
         )
         
         # Parse the response
-        fact_check_result = json.loads(response.choices[0].message.content.strip())
+        result_text = response.choices[0].message.content.strip()
+        fact_check_result = json.loads(result_text)
         
         # Ensure required fields exist
         if not "verdict" in fact_check_result:
-            fact_check_result["verdict"] = "unverifiable"
+            return "error", "The AI response did not include a verdict"
+            
         if not "explanation" in fact_check_result:
             fact_check_result["explanation"] = "No explanation provided"
-        
-        return fact_check_result
+            
+        return fact_check_result["verdict"], fact_check_result["explanation"]
         
     except Exception as e:
         print(f"OpenAI fact-check error: {type(e).__name__} - {e}")
-        return {
-            "claim": claim,
-            "verdict": "error",
-            "explanation": f"Error during fact-checking: {str(e)}"
-        }
+        return "error", f"Error processing fact check: {str(e)}"
+
 
 def fact_check_with_gemini(claim, content, api_key):
     """
     Fact-check a claim using Google's Gemini API
     """
     try:
+        import google.generativeai as genai
+        
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
         # Prepare context and claim
-        # Limit content length to avoid token limits
-        limited_content = content[:15000] if content else "No content available"
+        limited_content = content[:30000] if content else "No content available"
         
         prompt = f"""
         Fact check the following claim based on the provided content.
-        
+        Return ONLY a JSON object with the following fields:
+        - "verdict": one of ["verified", "false", "partially_true", "disputed", "lacks_consensus", "unverifiable"]
+        - "explanation": a brief explanation of your verdict (1-3 sentences)
+
         Claim: "{claim}"
         
         Content to check against:
         {limited_content}
-        
-        Return your response as a valid JSON object with these fields:
-        - "claim": the original claim being verified
-        - "verdict": one of ["verified", "false", "partially_true", "disputed", "lacks_consensus", "unverifiable"]
-        - "explanation": a brief explanation of your verdict (1-3 sentences)
-        
-        ONLY respond with a valid JSON object.
         """
         
-        # Try using JSON generation first
-        try:
-            generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
-            response = model.generate_content(prompt, generation_config=generation_config)
-            fact_check_result = json.loads(response.text)
-        except Exception as inner_e:
-            print(f"Gemini JSON generation failed: {inner_e}. Trying text fallback.")
-            # Fallback to regular text generation
-            response = model.generate_content(prompt)
-            response_text = response.text.strip()
-            
-            # Handle code block formatting if present
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-                
-            fact_check_result = json.loads(response_text.strip())
+        gen_config = genai.types.GenerationConfig(response_mime_type="application/json")
+        
+        # Call the Gemini API
+        response = model.generate_content(prompt, generation_config=gen_config)
+        result_text = response.text
+        
+        # Parse the response
+        fact_check_result = json.loads(result_text)
         
         # Ensure required fields exist
         if not "verdict" in fact_check_result:
-            fact_check_result["verdict"] = "unverifiable"
+            return "error", "The AI response did not include a verdict"
+            
         if not "explanation" in fact_check_result:
             fact_check_result["explanation"] = "No explanation provided"
             
-        return fact_check_result
+        return fact_check_result["verdict"], fact_check_result["explanation"]
         
     except Exception as e:
         print(f"Gemini fact-check error: {type(e).__name__} - {e}")
-        return {
-            "claim": claim,
-            "verdict": "error",
-            "explanation": f"Error during fact-checking: {str(e)}"
-        }
-
-@app.route('/fact-check', methods=['POST'])
-def fact_check():
-    try:
-        # Get the request data
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Invalid JSON"}), 400
+        return "error", f"Error processing fact check: {str(e)}"
         
-        # Extract parameters
-        url = data.get('url')
-        claim = data.get('claim')
-        ai_provider = data.get('ai_provider', 'gemini')  # Default to gemini
-        user_api_key = data.get('user_api_key', '')
-        
-        # Validate parameters
-        if not url:
-            return jsonify({"error": "URL is required"}), 400
-        if not claim:
-            return jsonify({"error": "Claim is required"}), 400
-            
-        # Get content from URL
-        try:
-            content = fetch_text_from_url(url)  # Using your existing function
-            print(f"Extracted ~{len(content) if content else 0} chars from {url}")
-        except Exception as e:
-            print(f"Error extracting content: {str(e)}")
-            content = ""
-        
-        # Select the AI provider
-        try:
-            if ai_provider == 'openai':
-                if not user_api_key and not SERVER_OPENAI_API_KEY:
-                    return jsonify({"error": "OpenAI API key is required"}), 400
-                    
-                api_key_to_use = user_api_key or SERVER_OPENAI_API_KEY
-                result = fact_check_with_openai(claim, content, api_key_to_use)
-                
-            elif ai_provider == 'gemini':
-                if not user_api_key:
-                    return jsonify({"error": "Gemini API key is required"}), 400
-                    
-                result = fact_check_with_gemini(claim, content, user_api_key)
-                
-            else:
-                return jsonify({"error": f"Unsupported AI provider: {ai_provider}"}), 400
-                
-            return jsonify(result), 200
-            
-        except Exception as e:
-            print(f"Fact-check error: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return jsonify({"error": f"Fact-check failed: {str(e)}"}), 503
-            
-    except Exception as e:
-        print(f"General error in fact-check endpoint: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
 @app.route('/score', methods=['POST'])
 def score_endpoint():
     data=request.get_json();_ = not data and (jsonify({"error":"Invalid JSON"}),400);s_type=data.get('source_type','unknown').lower();b_trust=float(data.get('base_trust',50));r_boost=float(data.get('recency_boost',0));fc_v=data.get('factcheckVerdict','pending').lower();BTS_MAX=60;RMS_MAX=15;FCS_MAX=20;ITA_MAX=10;bts=min(max(b_trust/100*BTS_MAX,0),BTS_MAX);rs=min(max(r_boost/100*RMS_MAX,0),RMS_MAX);fcs_map={"verified":FCS_MAX,"neutral":0,"disputed":-FCS_MAX,"disputed_false":-FCS_MAX,"pending":-2,"lacks_consensus":-int(FCS_MAX*.4),"needs_context":0,"needs_context_format_error":0,"needs_context_ast_eval":0,"needs_context_fallback":0,"service_unavailable":0,"unverifiable":-int(FCS_MAX*.6),"error_parsing":-5};fcs=fcs_map.get(fc_v,0);itq_map={"government":.8,"academic_institution":.9,"research_publication":.9,"encyclopedia":.7,"news_media_mainstream":.6,"news_opinion_blog_live":.3,"ngo_nonprofit_publication":.5,"ngo_nonprofit_organization":.4,"ngo_nonprofit_general":.2,"corporate_blog_pr_info":.1,"news_media_other_or_blog":-.3,"social_media_platform":-.8,"social_media_platform_video":-.7,"social_media_channel_creator":-.5,"social_blogging_platform_user_pub":-.4,"social_blogging_platform":-.6,"website_general":0,"unknown_url":-.9,"unknown_other":-.9,"unknown_error_parsing":-1,"mainstream":.6,"alternative":-.4,"unknown":-.7};tqv=itq_map.get(s_type,0.);ita=tqv*ITA_MAX;tis=bts+rs+fcs+ita;fs=int(round(min(max(tis,0),100)));return jsonify({"intrinsic_credibility_score":fs,"factors":{"base_trust_contribution":round(bts,2),"recency_contribution":round(rs,2),"fact_check_contribution":round(fcs,2),"type_quality_adjustment":round(ita,2)}})

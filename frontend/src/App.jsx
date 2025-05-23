@@ -65,6 +65,9 @@ function App() {
   const [summarizingIds, setSummarizingIds] = useState([]);
   const [factCheckingIds, setFactCheckingIds] = useState([]);
 
+  // Mobile menu state
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+
   // Handle engine selection
   const handleEngineChange = (engine) => {
     setSelectedEngines(prev => {
@@ -193,12 +196,93 @@ function App() {
 
   // Handle fact check
   const handleFactCheck = useCallback(async (result) => {
-    // Implement fact check functionality
+    if (!selectedAiProvider || (!openaiApiKey && !geminiApiKey)) {
+      alert('Please configure your AI provider in the API Settings');
+      setApiSettingsVisible(true);
+      return;
+    }
+    
+    try {
+      // Track which result is being processed
+      setFactCheckingIds(prev => [...prev, result.id]);
+      
+      // Get the current API key based on provider
+      const currentApiKey = selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey;
+      
+      // Call the API
+      const response = await factCheckAPI(
+        result.link,
+        result.snippet || result.title,
+        selectedAiProvider,
+        currentApiKey
+      );
+      
+      // Create a new result object with fact check data
+      const updatedResult = {
+        ...result,
+        fact_check_data: {
+          verdict: response.verdict,
+          explanation: response.explanation,
+          timestamp: new Date().toISOString()
+        }
+      };
+      
+      // Update the results array
+      setSearchResults(prev => 
+        prev.map(item => item.id === result.id ? updatedResult : item)
+      );
+    } catch (error) {
+      console.error('Fact check error:', error);
+      alert(`Error during fact check: ${error.message || 'Unknown error'}`);
+    } finally {
+      // Remove from processing list
+      setFactCheckingIds(prev => prev.filter(id => id !== result.id));
+    }
   }, [selectedAiProvider, openaiApiKey, geminiApiKey]);
 
   // Handle summarize
   const handleSummarize = useCallback(async (result) => {
-    // Implement summarize functionality
+    if (!selectedAiProvider || (!openaiApiKey && !geminiApiKey)) {
+      alert('Please configure your AI provider in the API Settings');
+      setApiSettingsVisible(true);
+      return;
+    }
+    
+    try {
+      // Track which result is being summarized
+      setSummarizingIds(prev => [...prev, result.id]);
+      
+      // Get the current API key based on provider
+      const currentApiKey = selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey;
+      
+      // Call the API
+      const response = await summarizeAPI(
+        result.link,
+        result.snippet || result.title,
+        selectedAiProvider,
+        currentApiKey
+      );
+      
+      // Create a new result object with summary data
+      const updatedResult = {
+        ...result,
+        summary_data: {
+          summary: response.summary,
+          timestamp: new Date().toISOString()
+        }
+      };
+      
+      // Update the results array
+      setSearchResults(prev => 
+        prev.map(item => item.id === result.id ? updatedResult : item)
+      );
+    } catch (error) {
+      console.error('Summarize error:', error);
+      alert(`Error during summarization: ${error.message || 'Unknown error'}`);
+    } finally {
+      // Remove from processing list
+      setSummarizingIds(prev => prev.filter(id => id !== result.id));
+    }
   }, [selectedAiProvider, openaiApiKey, geminiApiKey]);
 
   // Handle logout
@@ -220,10 +304,19 @@ function App() {
   return (
     <div className="min-h-screen bg-white text-gray-900">
       <Header 
-        currentUser={currentUser} 
-        onLogout={handleLogout} 
+        onApiSettingsClick={() => setApiSettingsVisible(true)}
         onLoginClick={() => setAuthModalVisible(true)} 
-        onSettingsClick={() => setApiSettingsVisible(true)} 
+        onRegisterClick={() => {
+          setAuthModalVisible(true);
+          // If you have authMode state:
+          // setAuthMode('register');
+        }}
+        onProfileClick={() => {
+          // Add profile functionality here
+          console.log("Profile clicked");
+        }}
+        showMobileMenu={showMobileMenu}
+        setShowMobileMenu={setShowMobileMenu}
       />
 
       {authModalVisible && (
@@ -248,7 +341,7 @@ function App() {
         />
       )}
 
-      <main className="container mx-auto p-6">
+      <main className="container mx-auto p-6 mt-28"> {/* Added mt-28 for top margin */}
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
           <SearchBar 
             searchQuery={searchQuery} 
@@ -305,6 +398,7 @@ function App() {
                       selectedAiProvider={selectedAiProvider}
                       aiApiKey={selectedAiProvider === 'openai' ? openaiApiKey : geminiApiKey}
                       isSummarizing={summarizingIds.includes(result.id)}
+                      isFactChecking={factCheckingIds.includes(result.id)}
                     />
                   ))}
                 </div>

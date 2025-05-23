@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, FileText, CheckCircle, Clock, Award } from 'lucide-react';
+import { ExternalLink, FileText, CheckCircle, Clock, Award, AlertTriangle } from 'lucide-react';
 
 const SearchResultItem = ({ 
     result, 
@@ -7,7 +7,8 @@ const SearchResultItem = ({
     onSummarize, 
     selectedAiProvider, 
     aiApiKey,
-    isSummarizing = false  // Added with default
+    isSummarizing = false,
+    isFactChecking = false
 }) => {
     const getFavicon = (url) => { 
         try { 
@@ -35,6 +36,29 @@ const SearchResultItem = ({
     };
     
     const sourceDisplay = getSourceDisplay(result.source_type_label);
+    
+    // Handle fact check verdict styling
+    const getVerdictStyle = (verdict) => {
+        switch(verdict?.toLowerCase()) {
+            case 'verified':
+                return { color: 'text-green-600', icon: <CheckCircle size={16} className="mr-1 text-green-600" /> };
+            case 'false':
+                return { color: 'text-red-600', icon: <AlertTriangle size={16} className="mr-1 text-red-600" /> };
+            case 'disputed':
+            case 'disputed_false':
+                return { color: 'text-orange-600', icon: <AlertTriangle size={16} className="mr-1 text-orange-600" /> };
+            case 'lacks_consensus':
+                return { color: 'text-yellow-600', icon: <AlertTriangle size={16} className="mr-1 text-yellow-600" /> };
+            case 'partially_true':
+                return { color: 'text-blue-600', icon: <AlertTriangle size={16} className="mr-1 text-blue-600" /> };
+            default:
+                return { color: 'text-gray-600', icon: <AlertTriangle size={16} className="mr-1 text-gray-600" /> };
+        }
+    };
+    
+    const hasFactCheck = result.fact_check_data?.verdict;
+    const hasSummary = result.summary_data?.summary;
+    const verdictStyle = hasFactCheck ? getVerdictStyle(result.fact_check_data.verdict) : null;
     
     return (
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow">
@@ -75,34 +99,73 @@ const SearchResultItem = ({
                     {result.snippet}
                 </p>
                 
+                {/* Fact Check Results (if available) */}
+                {hasFactCheck && (
+                    <div className={`mt-3 p-3 border rounded-md bg-gray-50 ${verdictStyle.color}`}>
+                        <div className="flex items-center font-medium mb-1">
+                            {verdictStyle.icon}
+                            <span>Fact Check: {result.fact_check_data.verdict}</span>
+                        </div>
+                        <p className="text-sm text-gray-700">
+                            {result.fact_check_data.explanation}
+                        </p>
+                    </div>
+                )}
+                
+                {/* Summary Results (if available) */}
+                {hasSummary && (
+                    <div className="mt-3 p-3 border rounded-md bg-gray-50">
+                        <div className="flex items-center font-medium mb-1 text-purple-600">
+                            <FileText size={16} className="mr-1" />
+                            <span>Summary</span>
+                        </div>
+                        <p className="text-sm text-gray-700">
+                            {result.summary_data.summary}
+                        </p>
+                    </div>
+                )}
+                
                 {/* Action buttons */}
                 <div className="flex flex-wrap gap-2 mt-3">
                     <button 
                         onClick={() => onFactCheck(result)}
-                        className="px-3 py-1.5 bg-white border border-gray-300 text-gray-900 text-xs hover:bg-gray-50 hover:border-purple-600 flex items-center uppercase tracking-wide rounded-md"
+                        className={`px-3 py-1.5 bg-white border border-gray-300 text-gray-900 text-xs hover:bg-gray-50 hover:border-purple-600 flex items-center uppercase tracking-wide rounded-md ${isFactChecking ? 'opacity-50' : ''}`}
+                        disabled={isFactChecking}
                     >
-                        <CheckCircle size={14} className="mr-1.5" /> Fact-Check
+                        {isFactChecking ? (
+                            <>
+                                <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <span>CHECKING...</span>
+                            </>
+                        ) : (
+                            <>
+                                <CheckCircle size={14} className="mr-1.5" /> Fact-Check
+                            </>
+                        )}
                     </button>
                                                             
                     <button 
-                      onClick={() => onSummarize(result)}
-                      className="px-3 py-1.5 bg-white border border-gray-300 text-gray-900 text-xs hover:bg-gray-50 hover:border-purple-600 flex items-center uppercase tracking-wide rounded-md"
-                      disabled={isSummarizing}
+                        onClick={() => onSummarize(result)}
+                        className={`px-3 py-1.5 bg-white border border-gray-300 text-gray-900 text-xs hover:bg-gray-50 hover:border-purple-600 flex items-center uppercase tracking-wide rounded-md ${isSummarizing ? 'opacity-50' : ''}`}
+                        disabled={isSummarizing}
                     >
-                      {isSummarizing ? (
-                        <>
-                          <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-green-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          <span>PROCESSING...</span>
-                        </>
-                      ) : (
-                        <>
-                          <FileText size={12} className="mr-1" />
-                          <span>SUMMARIZE</span>
-                        </>
-                      )}
+                        {isSummarizing ? (
+                            <>
+                                <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <span>SUMMARIZING...</span>
+                            </>
+                        ) : (
+                            <>
+                                <FileText size={12} className="mr-1" />
+                                <span>SUMMARIZE</span>
+                            </>
+                        )}
                     </button>
                 </div>
             </div>
