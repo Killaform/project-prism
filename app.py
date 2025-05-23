@@ -2,7 +2,7 @@ import os
 import json
 import ast
 from datetime import datetime, timedelta, timezone # Added timezone for UTC
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, url_for
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy # Added
 from flask_bcrypt import Bcrypt # Added
@@ -14,6 +14,7 @@ import google.generativeai as genai # For future Gemini integration
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+from authlib.integrations.flask_client import OAuth
 
 # Load environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -37,6 +38,17 @@ db = SQLAlchemy(app) # Initialize SQLAlchemy
 bcrypt = Bcrypt(app) # Initialize Bcrypt
 jwt = JWTManager(app) # Initialize JWTManager
 # --- END NEW CONFIGURATIONS FOR USER ACCOUNTS ---
+
+# --- BEGIN GOOGLE OAUTH CONFIGURATION ---
+oauth = OAuth(app)
+oauth.register(
+    name="google",
+    client_id=os.getenv("GOOGLE_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+# --- END GOOGLE OAUTH CONFIGURATION ---
 
 # --- BEGIN DATABASE MODELS ---
 class User(db.Model):
@@ -216,171 +228,120 @@ def fetch_results_via_serpapi(query, engine_name, api_key_to_use, num_results=10
     except Exception as e: print(f"SerpApi: Error {engine_name}: {type(e).__name__} - {e}"); return []
 
 @app.route('/search', methods=['POST'])
-
-# --- BEGIN AUTHENTICATION ROUTES ---
-
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    email = data.get('email')
-    password = data.get('password')
-
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
-
-    # Basic email validation (you might want a more robust one)
-    if '@' not in email or '.' not in email.split('@')[-1]:
-        return jsonify({"error": "Invalid email format"}), 400
-    
-    if len(password) < 8:
-        return jsonify({"error": "Password must be at least 8 characters long"}), 400
-
-    # Check if user already exists
-    existing_user = User.query.filter_by(email=email).first()
-    if existing_user:
-        return jsonify({"error": "Email already registered"}), 409 # 409 Conflict
-
-    try:
-        hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-        new_user = User(
-            email=email, 
-            password_hash=hashed_password,
-            # Other fields like name, given_name can be added here if provided during registration
-            # For now, we'll stick to email and password for simplicity
-            # google_id will be null for email/password registration
-        )
-        db.session.add(new_user)
-        db.session.commit()
-        
-        return jsonify({"message": "Registration successful. Please log in."}), 201
-
-    except Exception as e:
-        db.session.rollback() # Rollback in case of error
-        print(f"Error during registration: {e}") # Log the error
-        return jsonify({"error": "An error occurred during registration. Please try again."}), 500
-
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    email = data.get('email')
-    password = data.get('password')
-
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
-
-    user = User.query.filter_by(email=email).first()
-
-    if user and user.password_hash and bcrypt.check_password_hash(user.password_hash, password):
-        # User exists and password matches for an email/password user
-        access_token = create_access_token(identity=str(user.id)) # CHANGED THIS LINE
-        return jsonify(access_token=access_token, user_id=user.id, email=user.email), 200
-    elif user and not user.password_hash and user.google_id:
-        # User exists but seems to be a Google OAuth user without a local password
-        return jsonify({"error": "Please log in with Google. This account was registered via Google."}), 401
-    else:
-        # Invalid credentials (user not found or password mismatch)
-        return jsonify({"error": "Invalid email or password"}), 401
-
-# --- END AUTHENTICATION ROUTES ---
-
-# --- BEGIN SAVED QUERY ROUTES ---
-
-@app.route('/save_query', methods=['POST'])
-@jwt_required() # Protect this route, only logged-in users can access
-def save_query_route():
-    current_user_id = get_jwt_identity() # Get user_id from JWT
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    query_text = data.get('query_text')
-    selected_engines = data.get('selected_engines') # Expected to be a list
-    perspective = data.get('perspective')
-
-    if not all([query_text, selected_engines, perspective]):
-        return jsonify({"error": "Missing data: query_text, selected_engines, and perspective are required"}), 400
-    
-    if not isinstance(selected_engines, list):
-        return jsonify({"error": "selected_engines must be a list"}), 400
-
-    try:
-        new_saved_query = SavedQuery(
-            user_id=current_user_id,
-            query_text=query_text,
-            selected_engines=selected_engines, # Stored as JSON in DB
-            perspective=perspective
-        )
-        db.session.add(new_saved_query)
-        db.session.commit()
-        return jsonify({
-            "message": "Query saved successfully",
-            "saved_query": {
-                "id": new_saved_query.id,
-                "query_text": new_saved_query.query_text,
-                "selected_engines": new_saved_query.selected_engines,
-                "perspective": new_saved_query.perspective,
-                "created_at": new_saved_query.created_at.isoformat() # Return ISO format for datetime
-            }
-        }), 201
-    except Exception as e:
-        db.session.rollback()
-        print(f"Error saving query: {e}")
-        return jsonify({"error": "An error occurred while saving the query."}), 500
-
-@app.route('/my_queries', methods=['GET'])
-@jwt_required() # Protect this route
-def get_my_queries_route():
-    current_user_id = get_jwt_identity() # Get user_id from JWT
-
-    try:
-        user_queries = SavedQuery.query.filter_by(user_id=current_user_id).order_by(SavedQuery.created_at.desc()).all()
-        
-        queries_list = []
-        for q in user_queries:
-            queries_list.append({
-                "id": q.id,
-                "query_text": q.query_text,
-                "selected_engines": q.selected_engines,
-                "perspective": q.perspective,
-                "created_at": q.created_at.isoformat() # Return ISO format for datetime
-            })
-        return jsonify(queries_list), 200
-    except Exception as e:
-        print(f"Error fetching queries: {e}")
-        return jsonify({"error": "An error occurred while fetching your queries."}), 500
-
-# --- END SAVED QUERY ROUTES ---
-
 def search_endpoint():
-    data = request.json; o_query = data.get('query'); s_engines = data.get('engines',['google','bing','duckduckgo']); user_serp_key = data.get('user_serpapi_key')
-    active_serp_key = user_serp_key or SERVER_SERPAPI_KEY
-    if not active_serp_key: return jsonify({"error":"Search API key not configured or provided."}),500
-    if not o_query: return jsonify({"error":"Query required"}),400
-    if not s_engines: return jsonify({"error":"No engines selected."}),400
-    print(f"Search: '{o_query}' on {s_engines}. User SERP key: {'Provided' if user_serp_key else 'Not Provided (using server key if available)'}")
-    queries={"mainstream_fetch":f"{o_query}","fringe_fetch":f"{o_query} (forum OR discussion OR \"alternative opinion\" OR blog) -site:wikipedia.org -site:*.gov -site:*.mil -site:who.int -site:nih.gov"}
-    all_res=[];p_ai_provider=data.get('ai_provider','openai');p_user_ai_key=data.get('user_api_key',None)
-    for p_type,s_query in queries.items():
-        for engine in s_engines:
-            e_res=fetch_results_via_serpapi(s_query,engine,active_serp_key,num_results=10)
-            for item in e_res: item['perspective_query_type']=p_type;all_res.append(item)
-    temp_map={};_=[(temp_map.update({i['link']:i})if i['link']not in temp_map or(temp_map[i['link']]['perspective_query_type']=='fringe_fetch'and i['perspective_query_type']=='mainstream_fetch')else None)for i in all_res]
-    unique_list=list(temp_map.values());print(f"Fetched: {len(all_res)}, Unique: {len(unique_list)}")
-    output_res=[]
-    for r in unique_list:
-        r['source_type_label']=classify_source_type(r['link'],r.get('source_engine'))
-        txt_analyze=f"{r.get('title','')} {r.get('snippet','')}"
-        sentiment,bias=get_sentiment_and_bias(txt_analyze, p_ai_provider, p_user_ai_key)
-        r['sentiment']=sentiment;r['bias']=bias;r['base_trust']=50;r['recency_boost']=0;r['factcheckVerdict']='pending'
-        r['intrinsic_credibility_score']=None;r['intrinsic_credibility_factors']=None;output_res.append(r)
-    print(f"Returning {len(output_res)} processed results.");return jsonify(output_res)
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+    
+    # Extract search parameters
+    query = data.get('query')
+    if not query:
+        return jsonify({"error": "Search query is required"}), 400
+        
+    engines = data.get('engines', ['google'])
+    perspective = data.get('perspective', 'balanced')
+    serpapi_key = data.get('serpapi_key', '')
+    
+    # Use server SERP API key as fallback if not provided
+    api_key_to_use = serpapi_key or SERVER_SERPAPI_KEY
+    
+    if not api_key_to_use:
+        return jsonify({"error": "SERP API key is required but not provided"}), 400
+    
+    try:
+        all_results = []
+        
+        # Collect results from each selected engine
+        for engine in engines:
+            engine_results = fetch_results_via_serpapi(query, engine, api_key_to_use)
+            all_results.extend(engine_results)
+            
+        # Process results based on perspective
+        for result in all_results:
+            # Classify source type
+            source_type = classify_source_type(result.get('link'), result.get('source_engine', ''))
+            result['source_type_label'] = source_type
+            
+            # Add perspective query type based on the request
+            result['perspective_query_type'] = f"{perspective}_fetch"
+            
+            # Set trust scores based on source type
+            base_trust_map = {
+                "government": 85,
+                "academic_institution": 90,
+                "encyclopedia": 80,
+                "research_publication": 85,
+                "news_media_mainstream": 75,
+                "news_opinion_blog_live": 65,
+                "ngo_nonprofit_publication": 70,
+                "ngo_nonprofit_organization": 65,
+                "ngo_nonprofit_general": 60,
+                "corporate_blog_pr_info": 55,
+                "news_media_other_or_blog": 50,
+                "social_media_platform": 30,
+                "social_media_platform_video": 35,
+                "social_media_channel_creator": 40,
+                "social_blogging_platform_user_pub": 45,
+                "social_blogging_platform": 40,
+                "website_general": 50,
+                "mainstream": 75,
+                "alternative": 40,
+                "unknown": 30,
+                "unknown_url": 25,
+                "unknown_other": 30,
+                "unknown_error_parsing": 20
+            }
+            
+            result['base_trust'] = base_trust_map.get(source_type, 50)
+            result['recency_boost'] = 5  # Default recency boost
+            
+            # Calculate intrinsic score using the scoring endpoint logic
+            score_data = {
+                'source_type': source_type,
+                'base_trust': result['base_trust'],
+                'recency_boost': result['recency_boost'],
+                'factcheckVerdict': 'pending'
+            }
+            
+            # Calculate intrinsic credibility score
+            BTS_MAX = 60
+            RMS_MAX = 15
+            FCS_MAX = 20
+            ITA_MAX = 10
+            
+            bts = min(max(result['base_trust']/100 * BTS_MAX, 0), BTS_MAX)
+            rs = min(max(result['recency_boost']/100 * RMS_MAX, 0), RMS_MAX)
+            
+            # Source type quality adjustment
+            itq_map = {
+                "government": .8, "academic_institution": .9, "research_publication": .9,
+                "encyclopedia": .7, "news_media_mainstream": .6, "news_opinion_blog_live": .3,
+                "ngo_nonprofit_publication": .5, "ngo_nonprofit_organization": .4,
+                "ngo_nonprofit_general": .2, "corporate_blog_pr_info": .1,
+                "news_media_other_or_blog": -.3, "social_media_platform": -.8,
+                "social_media_platform_video": -.7, "social_media_channel_creator": -.5,
+                "social_blogging_platform_user_pub": -.4, "social_blogging_platform": -.6,
+                "website_general": 0, "unknown_url": -.9, "unknown_other": -.9,
+                "unknown_error_parsing": -1, "mainstream": .6, "alternative": -.4, "unknown": -.7
+            }
+            
+            tqv = itq_map.get(source_type, 0.)
+            ita = tqv * ITA_MAX
+            tis = bts + rs + ita  # No fact check yet
+            fs = int(round(min(max(tis, 0), 100)))
+            
+            result['intrinsic_credibility_score'] = fs
+        
+        return jsonify({
+            "query": query,
+            "engines": engines,
+            "perspective": perspective,
+            "results": all_results
+        })
+        
+    except Exception as e:
+        print(f"Search error: {e}")
+        return jsonify({"error": f"Search failed: {str(e)}"}), 500
 
 @app.route('/summarize', methods=['POST'])
 def summarize_endpoint():
@@ -460,7 +421,22 @@ def fact_check_endpoint():
 
 @app.route('/score', methods=['POST'])
 def score_endpoint():
-    data=request.get_json();_ = not data and (jsonify({"error":"Invalid JSON"}),400);s_type=data.get('source_type','unknown').lower();b_trust=float(data.get('base_trust',50));r_boost=float(data.get('recency_boost',0));fc_v=data.get('factcheckVerdict','pending').lower();BTS_MAX=60;RMS_MAX=15;FCS_MAX=20;ITA_MAX=10;bts=min(max(b_trust/100*BTS_MAX,0),BTS_MAX);rs=min(max(r_boost/100*RMS_MAX,0),RMS_MAX);fcs_map={"verified":FCS_MAX,"neutral":0,"disputed":-FCS_MAX,"disputed_false":-FCS_MAX,"pending":-2,"lacks_consensus":-int(FCS_MAX*.4),"needs_context":0,"needs_context_format_error":0,"needs_context_ast_eval":0,"needs_context_fallback":0,"service_unavailable":0,"unverifiable":-int(FCS_MAX*.6),"error_parsing":-5,"neutral_unavailable":0,"neutral_parsing_error":0,"neutral_error":0,"error":-5};fcs=fcs_map.get(fc_v,0);itq_map={"government":.8,"academic_institution":.9,"research_publication":.9,"encyclopedia":.7,"news_media_mainstream":.6,"news_opinion_blog_live":.3,"ngo_nonprofit_publication":.5,"ngo_nonprofit_organization":.4,"ngo_nonprofit_general":.2,"corporate_blog_pr_info":.1,"news_media_other_or_blog":-.3,"social_media_platform":-.8,"social_media_platform_video":-.7,"social_media_channel_creator":-.5,"social_blogging_platform_user_pub":-.4,"social_blogging_platform":-.6,"website_general":0.,"unknown_url":-.9,"unknown_other":-.9,"unknown_error_parsing":-1.,"mainstream":.6,"alternative":-.4,"unknown":-.7};tqv=itq_map.get(s_type,0.);ita=tqv*ITA_MAX;tis=bts+rs+fcs+ita;fs=int(round(min(max(tis,0),100)));return jsonify({"intrinsic_credibility_score":fs,"factors":{"base_trust_contribution":round(bts,2),"recency_contribution":round(rs,2),"fact_check_contribution":round(fcs,2),"type_quality_adjustment":round(ita,2)}})
+    data=request.get_json();_ = not data and (jsonify({"error":"Invalid JSON"}),400);s_type=data.get('source_type','unknown').lower();b_trust=float(data.get('base_trust',50));r_boost=float(data.get('recency_boost',0));fc_v=data.get('factcheckVerdict','pending').lower();BTS_MAX=60;RMS_MAX=15;FCS_MAX=20;ITA_MAX=10;bts=min(max(b_trust/100*BTS_MAX,0),BTS_MAX);rs=min(max(r_boost/100*RMS_MAX,0),RMS_MAX);fcs_map={"verified":FCS_MAX,"neutral":0,"disputed":-FCS_MAX,"disputed_false":-FCS_MAX,"pending":-2,"lacks_consensus":-int(FCS_MAX*.4),"needs_context":0,"needs_context_format_error":0,"needs_context_ast_eval":0,"needs_context_fallback":0,"service_unavailable":0,"unverifiable":-int(FCS_MAX*.6),"error_parsing":-5};fcs=fcs_map.get(fc_v,0);itq_map={"government":.8,"academic_institution":.9,"research_publication":.9,"encyclopedia":.7,"news_media_mainstream":.6,"news_opinion_blog_live":.3,"ngo_nonprofit_publication":.5,"ngo_nonprofit_organization":.4,"ngo_nonprofit_general":.2,"corporate_blog_pr_info":.1,"news_media_other_or_blog":-.3,"social_media_platform":-.8,"social_media_platform_video":-.7,"social_media_channel_creator":-.5,"social_blogging_platform_user_pub":-.4,"social_blogging_platform":-.6,"website_general":0,"unknown_url":-.9,"unknown_other":-.9,"unknown_error_parsing":-1,"mainstream":.6,"alternative":-.4,"unknown":-.7};tqv=itq_map.get(s_type,0.);ita=tqv*ITA_MAX;tis=bts+rs+fcs+ita;fs=int(round(min(max(tis,0),100)));return jsonify({"intrinsic_credibility_score":fs,"factors":{"base_trust_contribution":round(bts,2),"recency_contribution":round(rs,2),"fact_check_contribution":round(fcs,2),"type_quality_adjustment":round(ita,2)}})
+
+@app.route('/verify-token', methods=['GET'])
+@jwt_required()
+def verify_token():
+    """Simple endpoint to verify if a token is valid"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    return jsonify({
+        "valid": True, 
+        "user_id": current_user_id, 
+        "email": user.email
+    }), 200
 
 if __name__ == '__main__':
     port = int(os.getenv("FLASK_PORT", 5001))
