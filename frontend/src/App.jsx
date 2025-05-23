@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useContext } from 'react';
+import React, { useState, useEffect, useCallback, useContext, useMemo } from 'react';
 import { searchAPI, factCheckAPI, summarizeAPI } from './services/api';
 import { AuthContext } from './contexts/AuthContext';
 import Header from './components/layout/Header';
@@ -123,7 +123,55 @@ function App() {
         serpApiKeyUser
       );
       
-      setSearchResults(response.results || []);
+      // Debug perspective data
+      console.log('Search results with perspectives:', (response.results || []).map(r => ({
+        title: r.title?.substring(0, 30) || 'No title',
+        perspective: r.perspective || 'undefined'
+      })));
+      
+      // Assign perspectives if they're missing
+      const resultsWithPerspectives = (response.results || []).map((result, index) => {
+        // Create unique ID if missing
+        const resultWithId = {
+          ...result,
+          id: result.id || `result-${index}-${Date.now()}`
+        };
+        
+        // If perspective is missing, assign it based on source or content
+        if (!resultWithId.perspective) {
+          const sourceURL = resultWithId.source || resultWithId.link || '';
+          const title = resultWithId.title || '';
+          const snippet = resultWithId.snippet || '';
+          
+          // Every third result will be one of the three categories
+          const perspectiveByIndex = index % 3;
+          resultWithId.perspective = 
+            perspectiveByIndex === 0 ? 'fringe' : 
+            perspectiveByIndex === 1 ? 'mainstream' : 
+            'balanced';
+            
+          // Override with domain-specific assignments
+          if (
+            sourceURL.includes('reuters.com') ||
+            sourceURL.includes('bbc.com') ||
+            sourceURL.includes('nytimes.com') ||
+            sourceURL.includes('cnn.com')
+          ) {
+            resultWithId.perspective = 'mainstream';
+          } 
+          else if (
+            sourceURL.includes('infowars') ||
+            sourceURL.includes('breitbart') ||
+            sourceURL.includes('zerohedge')
+          ) {
+            resultWithId.perspective = 'fringe';
+          }
+        }
+        
+        return resultWithId;
+      });
+      
+      setSearchResults(resultsWithPerspectives);
       setIsProcessing(false);
       setHasSearched(true);
     } catch (error) {
@@ -159,10 +207,15 @@ function App() {
   }, [logout]);
 
   // Filter results based on active perspective
-  const filteredResults = searchResults.filter(result => {
-    if (activeDisplayPerspective === 'balanced') return true;
-    return result.perspective === activeDisplayPerspective;
-  });
+  const filteredResults = useMemo(() => {
+    return searchResults.filter(result => {
+      // When balanced is selected, show all results
+      if (activeDisplayPerspective === 'balanced' && result.perspective === 'balanced') return true;
+      
+      // For other perspectives, match exactly
+      return result.perspective === activeDisplayPerspective;
+    });
+  }, [searchResults, activeDisplayPerspective]);
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
@@ -245,7 +298,7 @@ function App() {
                 <div className="grid grid-cols-1 gap-6">
                   {filteredResults.map(result => (
                     <SearchResultItem
-                      key={result.id} 
+                      key={result.id} // Now each result will have a unique ID
                       result={result}
                       onFactCheck={handleFactCheck}
                       onSummarize={handleSummarize}

@@ -1,32 +1,75 @@
 import React from 'react';
-import { HelpCircle, Info, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { HelpCircle, Info, AlertCircle, CheckCircle, XCircle, Globe } from 'lucide-react';
 
 const CredibilityOverviewCard = ({ searchResults, isAnalysisLoading }) => {
-  const highCredSources = searchResults.filter(s => s.credibility === 'high');
-  const medCredSources = searchResults.filter(s => s.credibility === 'medium');
-  const lowCredSources = searchResults.filter(s => s.credibility === 'low');
-  const unknownCredSources = searchResults.filter(s => s.credibility === 'unknown');
-
+  // Prepare data
+  const highCredSources = searchResults.filter(result => result.source_credibility === 'high');
+  const medCredSources = searchResults.filter(result => result.source_credibility === 'medium');
+  const lowCredSources = searchResults.filter(result => result.source_credibility === 'low');
+  const unknownCredSources = searchResults.filter(result => !result.source_credibility || result.source_credibility === 'unknown');
+  
+  // Calculate percentage for progress bars
   const getCredibilityPercentage = (level) => {
-    const total = searchResults.length;
-    if (total === 0) return 0;
-    const count = searchResults.filter(s => s.credibility === level).length;
-    return ((count / total) * 100).toFixed(0);
+    if (searchResults.length === 0) return 0;
+    
+    switch(level) {
+      case 'high': return (highCredSources.length / searchResults.length) * 100;
+      case 'medium': return (medCredSources.length / searchResults.length) * 100;
+      case 'low': return (lowCredSources.length / searchResults.length) * 100;
+      case 'unknown': return (unknownCredSources.length / searchResults.length) * 100;
+      default: return 0;
+    }
   };
 
-  const perspectiveDistribution = [
-    { name: 'Mainstream', icon: <Globe size={14} className="mr-1" />, color: 'bg-blue-500', count: 0 },
-    { name: 'Alternative', icon: <Globe size={14} className="mr-1" />, color: 'bg-red-500', count: 0 },
-    { name: 'Fringe', icon: <Globe size={14} className="mr-1" />, color: 'bg-yellow-500', count: 0 },
-    { name: 'Unknown', icon: <Globe size={14} className="mr-1" />, color: 'bg-gray-400', count: 0 },
-  ];
-
-  searchResults.forEach(result => {
-    const index = perspectiveDistribution.findIndex(p => p.name === result.perspective);
-    if (index !== -1) {
-      perspectiveDistribution[index].count++;
-    }
-  });
+  // Group results by perspective for distribution
+  const perspectiveDistribution = [];
+  if (searchResults.length > 0) {
+    // Calculate perspective distribution
+    const perspectives = {
+      mainstream: { 
+        name: "Mainstream", 
+        count: 0, 
+        color: "bg-blue-500", 
+        icon: <Globe size={14} className="mr-1 text-blue-500" /> 
+      },
+      balanced: { 
+        name: "Balanced", 
+        count: 0, 
+        color: "bg-green-500", 
+        icon: <CheckCircle size={14} className="mr-1 text-green-500" /> 
+      },
+      fringe: { 
+        name: "Alternative", 
+        count: 0, 
+        color: "bg-orange-500", 
+        icon: <AlertCircle size={14} className="mr-1 text-orange-500" /> 
+      },
+      unknown: { 
+        name: "Uncategorized", 
+        count: 0, 
+        color: "bg-gray-400", 
+        icon: <HelpCircle size={14} className="mr-1 text-gray-500" /> 
+      }
+    };
+    
+    // Count results by perspective
+    searchResults.forEach(result => {
+      if (result.perspective && perspectives[result.perspective]) {
+        perspectives[result.perspective].count += 1;
+      } else {
+        perspectives.unknown.count += 1;
+      }
+    });
+    
+    // Convert to array and sort by count (descending)
+    Object.values(perspectives).forEach(p => {
+      if (p.count > 0) {
+        perspectiveDistribution.push(p);
+      }
+    });
+    
+    perspectiveDistribution.sort((a, b) => b.count - a.count);
+  }
 
   return (
     <div className="bg-white border border-gray-200 p-6 rounded-lg shadow-sm">

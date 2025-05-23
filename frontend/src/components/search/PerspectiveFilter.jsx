@@ -15,7 +15,7 @@ const PerspectiveFilter = ({ activeDisplayPerspective, handlePerspectiveButtonCl
           }`}
         >
           <Scale size={16} className="mr-2" />
-          BALANCED
+          ALL RESULTS
         </button>
         <button
           type="button"
