@@ -11,6 +11,7 @@ def setup_api(app):
     from perspective_engine.api.summarize import SummarizeResource
     from perspective_engine.api.fact_check import FactCheckResource
     from perspective_engine.api.verify import VerifyTokenResource
+    from perspective_engine.api.user_settings import UserApiKeyResource
     
     # Register resources
     api.add_resource(SearchResource, '/search')
@@ -20,6 +21,7 @@ def setup_api(app):
     api.add_resource(GoogleAuthResource, '/auth/google')
     api.add_resource(GoogleCallbackResource, '/auth/google/callback')
     api.add_resource(VerifyTokenResource, '/auth/verify')
+    api.add_resource(UserApiKeyResource, '/user/api-keys')
     
     # Add non-resource routes
     from perspective_engine.api.auth import register_auth_routes

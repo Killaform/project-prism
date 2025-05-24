@@ -187,8 +187,10 @@ def create_app():
     # Register API routes
     setup_api(app)
     
-    # Create database tables
+    # Import models and create database tables
     with app.app_context():
+        # Import models to register them with SQLAlchemy
+        from perspective_engine.models import User, UserApiKey
         db.create_all()
     
     return app
