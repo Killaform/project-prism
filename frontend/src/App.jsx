@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from './contexts/AuthContext';
 import { searchAPI, factCheckAPI, summarizeAPI } from './services/api';
+import { loginUser, registerUser } from './services/auth';
 import { createResultId } from './utils/helpers';
 import Header from './components/layout/Header';
 import Footer from './components/layout/Footer';
@@ -235,10 +236,13 @@ function App() {
     event.preventDefault();
     setAuthLoading(true);
     setAuthError('');
+    
     try {
-      console.log("Simulating login with:", authEmail);
-      authLogin({ email: authEmail, name: 'Logged In User' }, 'fake-jwt-token');
+      const response = await loginUser(authEmail, authPassword);
+      authLogin(response.user, response.token);
       setAuthModalVisible(false);
+      setAuthEmail('');
+      setAuthPassword('');
     } catch (error) {
       setAuthError(error.message || 'Login failed');
     } finally {
@@ -250,10 +254,15 @@ function App() {
     event.preventDefault();
     setAuthLoading(true);
     setAuthError('');
+    
     try {
-      console.log("Simulating registration for:", authEmail);
-      authLogin({ email: authEmail, name: 'Registered User' }, 'fake-jwt-token-new');
+      await registerUser(authEmail, authPassword);
+      // After successful registration, log them in
+      const loginResponse = await loginUser(authEmail, authPassword);
+      authLogin(loginResponse.user, loginResponse.token);
       setAuthModalVisible(false);
+      setAuthEmail('');
+      setAuthPassword('');
     } catch (error) {
       setAuthError(error.message || 'Registration failed');
     } finally {
@@ -263,13 +272,18 @@ function App() {
 
   const handleGoogleLoginSuccess = (googleAuthData) => {
     console.log('App.jsx: Google Login Success, data from button:', googleAuthData);
-    authLogin({ id: googleAuthData.userId, email: googleAuthData.email, name: googleAuthData.email }, googleAuthData.token);
+    authLogin({ 
+      id: googleAuthData.userId, 
+      email: googleAuthData.email, 
+      name: googleAuthData.name,
+      profile_pic_url: googleAuthData.profilePic
+    }, googleAuthData.token);
     setAuthModalVisible(false);
   };
   
   const handleProfileClick = () => {
     console.log("Profile clicked. Current user:", currentUser);
-    alert("Profile feature coming soon!");
+    alert(`Welcome ${currentUser?.name || currentUser?.email}!\n\nProfile features coming soon:\n- View search history\n- Saved searches\n- Account settings`);
   };
 
   return (

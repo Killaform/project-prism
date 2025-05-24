@@ -6,23 +6,34 @@ const GoogleLoginButton = ({ onSuccess }) => {
   useEffect(() => {
     const handleMessage = (event) => {
       if (event.data && event.data.type === 'GOOGLE_AUTH_SUCCESS') {
-        const { token, userId, email } = event.data.payload;
+        const { token, userId, email, name, profilePic } = event.data.payload;
         
         if (!token || !userId || !email) {
           console.error('Invalid authentication data received:', event.data.payload);
           return;
         }
         
-        console.log('Google authentication successful, storing data:', { 
-          userId, email, token: token.substring(0, 10) + '...'
+        console.log('Google authentication successful:', { 
+          userId, email, name, token: token.substring(0, 10) + '...'
         });
         
         // Store authentication data in localStorage
         localStorage.setItem('perspectiveEngineToken', token);
-        localStorage.setItem('perspectiveEngineUser', JSON.stringify({ id: userId, email }));
+        localStorage.setItem('perspectiveEngineUser', JSON.stringify({ 
+          id: userId, 
+          email, 
+          name: name || email,
+          profile_pic_url: profilePic 
+        }));
         
         // Call the onSuccess callback with auth data
-        onSuccess({ token, userId, email });
+        onSuccess({ 
+          token, 
+          userId, 
+          email, 
+          name: name || email,
+          profilePic 
+        });
       }
     };
     
@@ -39,17 +50,15 @@ const GoogleLoginButton = ({ onSuccess }) => {
     
     // Open Google login in popup window
     const popupWindow = window.open(
-      '/login/google',
+      `${import.meta.env.VITE_API_URL || 'http://localhost:5001'}/auth/google`,
       'googleLogin',
-      `width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0`
+      `width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0,scrollbars=1,resizable=1`
     );
     
     // Check if popup was blocked
     if (!popupWindow || popupWindow.closed) {
       console.error('Popup was blocked or could not be opened');
       alert('Please allow popups for this site to use Google login');
-      // Fallback to redirect method
-      window.location.href = '/login/google';
     }
   };
 

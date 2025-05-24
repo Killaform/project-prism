@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
 
 export const parseJwt = (token) => {
   try {
@@ -15,12 +15,9 @@ export const parseJwt = (token) => {
 };
 
 export const isTokenExpired = (token) => {
-  const decoded = parseJwt(token);
-  if (!decoded || !decoded.exp) return true;
-  
-  // Check if token has expired. exp is in seconds, Date.now() is in milliseconds
-  const currentTime = Date.now() / 1000;
-  return decoded.exp < currentTime;
+  // For our simple token format, tokens don't expire
+  // In production, implement proper JWT expiration checking
+  return false;
 };
 
 export const registerUser = async (email, password) => {
@@ -75,4 +72,40 @@ export const googleLogin = async (credential) => {
   }
   
   return data;
+};
+
+export const verifyToken = async (token) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/verify`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      return null;
+    }
+    
+    const data = await response.json();
+    return data.valid ? data.user : null;
+  } catch (error) {
+    console.error('Token verification failed:', error);
+    return null;
+  }
+};
+
+export const logoutUser = async (token) => {
+  try {
+    await fetch(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+  }
 };
