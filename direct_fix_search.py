@@ -1,11 +1,23 @@
 import os
-from flask_restful import Resource
+
+# Your API key - replace this with your actual key
+API_KEY = "YOUR_API_KEY_HERE"
+
+# Path to the search.py file
+search_file_path = 'perspective_engine/api/search.py'
+
+# Read the current content
+with open(search_file_path, 'r') as f:
+    content = f.read()
+
+# Create new content with real search implementation
+new_content = """from flask_restful import Resource
 from flask import request, jsonify
 from serpapi import SerpApiClient
 
 class SearchResource(Resource):
     def post(self):
-        """Handle search requests"""
+        \"\"\"Handle search requests\"\"\"
         data = request.get_json()
         if not data:
             return {"error": "Invalid JSON"}, 400
@@ -17,8 +29,8 @@ class SearchResource(Resource):
         engines = data.get('engines', ['google'])
         perspective = data.get('perspective', 'balanced')
         
-        # Use hardcoded API key - replace with your actual key
-        api_key = os.getenv("SERPAPI_KEY", "YOUR_SERPAPI_KEY_HERE")
+        # Use hardcoded API key
+        api_key = "%s"
         
         try:
             # Perform real search
@@ -68,7 +80,7 @@ class SearchResource(Resource):
             }
 
 def fetch_results_via_serpapi(query, engine_name, api_key, num_results=10):
-    """Fetch search results from SerpAPI"""
+    \"\"\"Fetch search results from SerpAPI\"\"\"
     if not api_key:
         print(f"No API key for {engine_name}")
         return []
@@ -108,7 +120,7 @@ def fetch_results_via_serpapi(query, engine_name, api_key, num_results=10):
         return []
 
 def get_mock_results(query):
-    """Return mock results for testing"""
+    \"\"\"Return mock results for testing\"\"\"
     print(f"Generating mock results for query: {query}")
     
     return [
@@ -168,3 +180,11 @@ def get_mock_results(query):
             "intrinsic_credibility_score": 85
         }
     ]
+""" % API_KEY
+
+# Write the new content
+with open(search_file_path, 'w') as f:
+    f.write(new_content)
+
+print(f"Updated {search_file_path} with hardcoded API key")
+print("Restart your server for the changes to take effect")

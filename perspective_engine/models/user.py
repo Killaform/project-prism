@@ -16,7 +16,6 @@ class User(UserMixin, db.Model):
     google_id = db.Column(db.String(100), unique=True, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_login_at = db.Column(db.DateTime, nullable=True)
-    is_active = db.Column(db.Boolean, default=True)
 
     # Relationship to API keys
     api_keys = db.relationship('UserApiKey', backref='user', lazy=True, cascade="all, delete-orphan")
