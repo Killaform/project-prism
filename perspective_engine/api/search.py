@@ -18,7 +18,7 @@ class SearchResource(Resource):
         perspective = data.get('perspective', 'balanced')
         
         # Use hardcoded API key - replace with your actual key
-        api_key = os.getenv("SERPAPI_KEY", "YOUR_SERPAPI_KEY_HERE")
+        api_key = os.getenv("SERPAPI_KEY")
         
         try:
             # Perform real search
