@@ -2,10 +2,9 @@
 from flask import Blueprint, request, jsonify, current_app
 from serpapi import SerpApiClient 
 import os
+import json
 from flask_jwt_extended import jwt_required
 from .utils import (
-    classify_with_openai, 
-    classify_with_gemini, 
     infer_perspective_from_url_and_title,
     perform_fact_check,
     perform_summarization,
@@ -67,7 +66,6 @@ def classify_with_openai(results, api_key):
             temperature=0.1
         )
         
-        import json
         ai_results = json.loads(response.choices[0].message.content)
         
         # Map AI results back to original results
@@ -206,7 +204,7 @@ def search():
 
                     if link and link not in processed_links:
                         all_fetched_results.append({
-                            "id": f"{engine}-{perspective_type}-{res_idx}-{hash(link)}",
+                            "id": f"{engine}-{perspective_type}-{res_idx}-{hash(link)}-{len(all_fetched_results)}",
                             "title": title,
                             "link": link,
                             "snippet": snippet,

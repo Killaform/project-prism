@@ -25,9 +25,12 @@ export const getSourceDisplay = (sourceType) => {
   }
 };
 
-// Create a unique identifier for a search result
+// Create a TRULY unique identifier for a search result
 export const createResultId = (result) => {
-  return `${result.link}-${result.perspective_query_type}`;
+  const baseId = `${result.link || 'no-link'}-${result.perspective_query_type || 'unknown'}`;
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substr(2, 9);
+  return `${baseId}-${timestamp}-${random}`;
 };
 
 // Format date string
