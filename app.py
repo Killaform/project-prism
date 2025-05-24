@@ -2,7 +2,8 @@ import os
 import json
 import ast
 from datetime import datetime, timedelta, timezone # Added timezone for UTC
-from flask import Flask, request, jsonify, redirect, url_for
+from flask import Flask, request, jsonify, redirect, url_for, session
+from datetime import datetime, timezone
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy # Added
 from flask_bcrypt import Bcrypt # Added
@@ -829,6 +830,117 @@ def infer_perspective_from_url_and_title(url, title):
     
     # Default to neutral if no clear signals
     return 'neutral'
+
+
+def return_oauth_error(error_message):
+    """Helper function to return OAuth error"""
+    frontend_url = session.get('auth_redirect_url', 'http://localhost:5173')
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Authentication Error</title></head>
+    <body>
+        <script>
+            window.opener.postMessage({{
+                type: 'GOOGLE_AUTH_ERROR',
+                message: '{error_message}'
+            }}, '{frontend_url}');
+            window.close();
+        </script>
+        <p>Authentication error: {error_message}</p>
+    </body>
+    </html>
+    """
+
+
+@app.route('/auth/google')
+def google_auth():
+    """Initiate Google OAuth flow"""
+    frontend_url = request.args.get('redirect_url', 'http://localhost:5173')
+    session['auth_redirect_url'] = frontend_url
+    
+    # Use absolute URL with http://localhost:5001 explicitly
+    redirect_uri = "http://localhost:5001/auth/google/callback"
+    print(f"Google OAuth: Redirecting to Google with callback URL: {redirect_uri}")
+    
+    return oauth.google.authorize_redirect(redirect_uri)
+
+@app.route('/auth/google/callback')
+def google_callback():
+    """Handle Google OAuth callback"""
+    print(f"Google callback received")
+    print(f"Request URL: {request.url}")
+    print(f"Request args: {request.args}")
+    
+    try:
+        token = oauth.google.authorize_access_token()
+        print(f"Token received: {bool(token)}")
+        
+        user_info = token.get('userinfo')
+        print(f"User info: {user_info}")
+        
+        if not user_info:
+            return return_oauth_error("No user information received")
+        
+        # Find or create user
+        user = User.query.filter_by(google_id=user_info['sub']).first()
+        
+        if not user:
+            user = User.query.filter_by(email=user_info['email']).first()
+            if user:
+                user.google_id = user_info['sub']
+                user.profile_pic_url = user_info.get('picture', '')
+            else:
+                user = User(
+                    google_id=user_info['sub'],
+                    email=user_info['email'],
+                    name=user_info.get('name', ''),
+                    profile_pic_url=user_info.get('picture', ''),
+                    created_at=datetime.now(timezone.utc)
+                )
+                db.session.add(user)
+        
+        user.last_login_at = datetime.now(timezone.utc)
+        db.session.commit()
+        
+        # Create JWT token
+        auth_token = create_access_token(
+            identity=user.id,
+            additional_claims={
+                'email': user.email,
+                'name': user.name
+            }
+        )
+        
+        frontend_url = session.get('auth_redirect_url', 'http://localhost:5173')
+        
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Authentication Successful</title></head>
+        <body>
+            <script>
+                window.opener.postMessage({{
+                    type: 'GOOGLE_AUTH_SUCCESS',
+                    payload: {{
+                        token: '{auth_token}',
+                        userId: '{user.id}',
+                        email: '{user.email}',
+                        name: '{user.name}',
+                        profilePic: '{user.profile_pic_url or ""}'
+                    }}
+                }}, '{frontend_url}');
+                setTimeout(() => {{ window.close(); }}, 1000);
+            </script>
+            <h3>Authentication Successful!</h3>
+            <p>This window will close automatically...</p>
+        </body>
+        </html>
+        """
+    except Exception as e:
+        print(f"OAuth callback error: {e}")
+        return return_oauth_error(f"Authentication failed: {str(e)}")
+
 
 if __name__ == '__main__':
     # Make sure database tables are created before running the app

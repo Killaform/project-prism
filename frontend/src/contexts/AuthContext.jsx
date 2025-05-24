@@ -9,31 +9,34 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(() => localStorage.getItem('perspectiveEngineToken'));
 
   useEffect(() => {
+    // Fix 6: Update initializeAuth function with better error handling
     const initializeAuth = async () => {
       const storedToken = localStorage.getItem('perspectiveEngineToken');
-      const storedUser = localStorage.getItem('perspectiveEngineUser');
       
-      if (storedToken && !isTokenExpired(storedToken)) {
+      if (storedToken) {
         setToken(storedToken);
         
-        // Verify token with backend
-        const verifiedUser = await verifyToken(storedToken);
-        
-        if (verifiedUser) {
-          setCurrentUser(verifiedUser);
-        } else {
-          // Token is invalid, clear storage
+        try {
+          // Verify token with backend
+          const verifiedUser = await verifyToken(storedToken);
+          
+          if (verifiedUser) {
+            setCurrentUser(verifiedUser);
+          } else {
+            // Token is invalid, clear storage
+            localStorage.removeItem('perspectiveEngineToken');
+            localStorage.removeItem('perspectiveEngineUser');
+            setCurrentUser(null);
+            setToken(null);
+          }
+        } catch (error) {
+          console.error('Token verification failed:', error);
+          // Clear invalid token
           localStorage.removeItem('perspectiveEngineToken');
           localStorage.removeItem('perspectiveEngineUser');
           setCurrentUser(null);
           setToken(null);
         }
-      } else if (storedToken) {
-        // Token exists but is expired
-        localStorage.removeItem('perspectiveEngineToken');
-        localStorage.removeItem('perspectiveEngineUser');
-        setCurrentUser(null);
-        setToken(null);
       }
       
       setLoading(false);

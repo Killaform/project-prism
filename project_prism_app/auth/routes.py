@@ -2,27 +2,46 @@
 from flask import Blueprint, request, jsonify, redirect, url_for, session, current_app
 from flask_login import login_user, logout_user, current_user, login_required
 from flask_bcrypt import Bcrypt
-from authlib.integrations.flask_client import OAuth
-from ..models import User, db
-import requests
-import json
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime, timezone
+import os
+import jwt
+
+# Import from parent package
+from .. import db, oauth
+from ..models import User
 
 auth_bp = Blueprint('auth_bp', __name__)
+
+# Initialize bcrypt
 bcrypt = Bcrypt()
 
-@auth_bp.route('/register', methods=['POST'])
+@auth_bp.route('/test')
+def test():
+    return "Auth blueprint is working!"
+
+@auth_bp.route('/register', methods=['POST', 'OPTIONS'])
 def register():
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
         email = data.get('email')
         password = data.get('password')
+        
+        print(f"Registration attempt for email: {email}")
         
         if not email or not password:
             return jsonify({'error': 'Email and password are required'}), 400
             
         # Check if user already exists
-        if User.query.filter_by(email=email).first():
+        existing_user = User.query.filter_by(email=email).first()
+        if existing_user:
             return jsonify({'error': 'User already exists with this email'}), 400
             
         # Create new user
@@ -30,11 +49,14 @@ def register():
         new_user = User(
             email=email,
             password_hash=password_hash,
-            name=email.split('@')[0]  # Use part before @ as default name
+            name=email.split('@')[0],  # Use part before @ as default name
+            created_at=datetime.now(timezone.utc)
         )
         
         db.session.add(new_user)
         db.session.commit()
+        
+        print(f"Successfully created user: {email}")
         
         return jsonify({
             'message': 'User created successfully',
@@ -46,15 +68,25 @@ def register():
         }), 201
         
     except Exception as e:
+        print(f"Registration error: {e}")
         db.session.rollback()
         return jsonify({'error': f'Registration failed: {str(e)}'}), 500
 
-@auth_bp.route('/login', methods=['POST'])
+@auth_bp.route('/login', methods=['POST', 'OPTIONS'])
 def login():
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
         email = data.get('email')
         password = data.get('password')
+        
+        print(f"Login attempt for email: {email}")
         
         if not email or not password:
             return jsonify({'error': 'Email and password are required'}), 400
@@ -62,15 +94,32 @@ def login():
         # Find user
         user = User.query.filter_by(email=email).first()
         
-        if not user or not bcrypt.check_password_hash(user.password_hash, password):
+        if not user:
+            print(f"User not found: {email}")
+            return jsonify({'error': 'Invalid email or password'}), 401
+            
+        if not user.password_hash:
+            print(f"User has no password (OAuth user): {email}")
+            return jsonify({'error': 'Please use Google login for this account'}), 401
+            
+        if not bcrypt.check_password_hash(user.password_hash, password):
+            print(f"Invalid password for user: {email}")
             return jsonify({'error': 'Invalid email or password'}), 401
             
         # Update last login
         user.last_login_at = datetime.now(timezone.utc)
         db.session.commit()
         
-        # Create token (simplified - in production use proper JWT)
-        token = f"user_{user.id}_{user.email}"
+        # Replace simple token with proper JWT
+        token = create_access_token(
+            identity=user.id,
+            additional_claims={
+                'email': user.email,
+                'name': user.name
+            }
+        )
+        
+        print(f"Successful login for user: {email}")
         
         return jsonify({
             'message': 'Login successful',
@@ -84,32 +133,43 @@ def login():
         }), 200
         
     except Exception as e:
+        print(f"Login error: {e}")
         return jsonify({'error': f'Login failed: {str(e)}'}), 500
 
 @auth_bp.route('/google')
 def google_auth():
     """Initiate Google OAuth flow"""
-    from .. import oauth
-    
-    # Store the frontend URL to redirect back to after auth
-    frontend_url = request.args.get('redirect_url', current_app.config.get('FRONTEND_URL', 'http://localhost:5173'))
-    session['auth_redirect_url'] = frontend_url
-    
-    redirect_uri = url_for('auth_bp.google_callback', _external=True)
-    return oauth.google.authorize_redirect(redirect_uri)
+    try:
+        # Check if OAuth is configured
+        if not hasattr(oauth, 'google'):
+            return return_oauth_error("Google OAuth not configured")
+        
+        # Store the frontend URL to redirect back to after auth
+        frontend_url = request.args.get('redirect_url', current_app.config.get('FRONTEND_URL', 'http://localhost:5173'))
+        session['auth_redirect_url'] = frontend_url
+        
+        redirect_uri = url_for('auth_bp.google_callback', _external=True)
+        print(f"Google OAuth: Redirecting to Google with callback URL: {redirect_uri}")
+        
+        return oauth.google.authorize_redirect(redirect_uri)
+        
+    except Exception as e:
+        print(f"Google OAuth initiation error: {e}")
+        return return_oauth_error(f"OAuth initialization failed: {str(e)}")
 
 @auth_bp.route('/google/callback')
 def google_callback():
     """Handle Google OAuth callback"""
     try:
-        from .. import oauth
-        
         # Get token from Google
         token = oauth.google.authorize_access_token()
         user_info = token.get('userinfo')
         
         if not user_info:
-            return redirect(f"{session.get('auth_redirect_url', 'http://localhost:5173')}?error=oauth_failed")
+            print("Google OAuth: No user info received")
+            return return_oauth_error("No user information received from Google")
+        
+        print(f"Google OAuth: User info received for {user_info.get('email')}")
         
         # Find or create user
         user = User.query.filter_by(google_id=user_info['sub']).first()
@@ -120,6 +180,8 @@ def google_callback():
             if user:
                 # Link Google account to existing user
                 user.google_id = user_info['sub']
+                user.profile_pic_url = user_info.get('picture', '')
+                print(f"Google OAuth: Linked Google account to existing user {user.email}")
             else:
                 # Create new user
                 user = User(
@@ -128,19 +190,30 @@ def google_callback():
                     name=user_info.get('name', ''),
                     given_name=user_info.get('given_name', ''),
                     family_name=user_info.get('family_name', ''),
-                    profile_pic_url=user_info.get('picture', '')
+                    profile_pic_url=user_info.get('picture', ''),
+                    created_at=datetime.now(timezone.utc)
                 )
                 db.session.add(user)
+                print(f"Google OAuth: Created new user {user.email}")
         
         # Update last login
         user.last_login_at = datetime.now(timezone.utc)
         db.session.commit()
         
-        # Create auth token
-        auth_token = f"google_{user.id}_{user.email}"
+        # Replace token generation with proper JWT
+        auth_token = create_access_token(
+            identity=user.id,
+            additional_claims={
+                'email': user.email,
+                'name': user.name,
+                'google_id': user.google_id
+            }
+        )
         
-        # Redirect to frontend with auth data
+        # Get frontend URL
         frontend_url = session.get('auth_redirect_url', 'http://localhost:5173')
+        
+        print(f"Google OAuth: Success for user {user.email}, closing popup")
         
         # Create a success page that closes the popup and sends data to parent
         return f"""
@@ -148,9 +221,20 @@ def google_callback():
         <html>
         <head>
             <title>Authentication Successful</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
+                .success {{ color: green; }}
+            </style>
         </head>
         <body>
+            <div class="success">
+                <h3>✓ Authentication Successful!</h3>
+                <p>Welcome, {user.name or user.email}!</p>
+                <p>This window will close automatically...</p>
+            </div>
             <script>
+                console.log('Google OAuth success, sending message to parent window');
+                
                 // Send auth data to parent window
                 window.opener.postMessage({{
                     type: 'GOOGLE_AUTH_SUCCESS',
@@ -158,160 +242,142 @@ def google_callback():
                         token: '{auth_token}',
                         userId: '{user.id}',
                         email: '{user.email}',
-                        name: '{user.name}',
+                        name: '{user.name or user.email}',
                         profilePic: '{user.profile_pic_url or ''}'
                     }}
                 }}, '{frontend_url}');
-                window.close();
+                
+                // Close window after short delay
+                setTimeout(() => {{
+                    window.close();
+                }}, 1000);
             </script>
-            <p>Authentication successful! This window should close automatically.</p>
         </body>
         </html>
         """
         
     except Exception as e:
-        print(f"Google OAuth error: {e}")
-        frontend_url = session.get('auth_redirect_url', 'http://localhost:5173')
-        return redirect(f"{frontend_url}?error=oauth_error")
+        print(f"Google OAuth callback error: {e}")
+        return return_oauth_error(f"Authentication failed: {str(e)}")
+
+def return_oauth_error(error_message):
+    """Helper function to return OAuth error"""
+    frontend_url = session.get('auth_redirect_url', 'http://localhost:5173')
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Authentication Error</title></head>
+    <body>
+        <script>
+            window.opener.postMessage({{
+                type: 'GOOGLE_AUTH_ERROR',
+                message: '{error_message}'
+            }}, '{frontend_url}');
+            window.close();
+        </script>
+        <p>Authentication error: {error_message}</p>
+        <p>This window should close automatically.</p>
+    </body>
+    </html>
+    """
 
 @auth_bp.route('/logout', methods=['POST'])
 def logout():
     try:
-        # In a real app, you'd invalidate the token here
         return jsonify({'message': 'Logout successful'}), 200
     except Exception as e:
         return jsonify({'error': f'Logout failed: {str(e)}'}), 500
 
 @auth_bp.route('/verify', methods=['GET'])
+@jwt_required()
 def verify_token():
-    """Verify if a token is valid"""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': 'No valid token provided'}), 401
+    """Verify if a token is valid using JWT"""
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
     
-    token = auth_header.replace('Bearer ', '')
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
     
-    # Simple token validation (in production, use proper JWT)
-    if token.startswith('user_') or token.startswith('google_'):
-        try:
-            parts = token.split('_')
-            user_id = int(parts[1])
-            user = User.query.get(user_id)
+    return jsonify({
+        'valid': True,
+        'user': {
+            'id': user.id,
+            'email': user.email,
+            'name': user.name,
+            'profile_pic_url': user.profile_pic_url
+        }
+    }), 200
+
+@auth_bp.route('/google-login', methods=['POST'])
+def google_login_api():
+    """Handle Google login via API (alternative to popup flow)"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
             
-            if user:
-                return jsonify({
-                    'valid': True,
-                    'user': {
-                        'id': user.id,
-                        'email': user.email,
-                        'name': user.name,
-                        'profile_pic_url': user.profile_pic_url
-                    }
-                }), 200
-        except:
-            pass
-    
-    return jsonify({'error': 'Invalid token'}), 401
-
-@auth_bp.route('/google/login')
-def google_login():
-    redirect_uri = url_for('auth_bp.google_authorize_callback', _external=True) 
-    print(f"Auth: Attempting Google login. Redirect URI for Google: {redirect_uri}")
-    if 'google' not in oauth._clients:
-         print("Auth: CRITICAL - Google OAuth client not registered in Authlib instance during create_app.")
-         return "Google OAuth is not configured correctly on the server. Please check server logs.", 500
-    return oauth.google.authorize_redirect(redirect_uri)
-
-@auth_bp.route('/google/callback') 
-def google_authorize_callback(): 
-    try:
-        token = oauth.google.authorize_access_token()
-        if not token:
-            print("Auth: Google OAuth failed to authorize access token.")
-            return redirect(f"{current_app.config.get('FRONTEND_URL', 'http://localhost:5173')}/login?error=token_authorization_failed")
-
-        userinfo_response = oauth.google.get('https://www.googleapis.com/oauth2/v3/userinfo')
-        userinfo_response.raise_for_status() 
-        user_google_info = userinfo_response.json()
-
-        google_id = user_google_info.get('sub')
-        email = user_google_info.get('email')
-        name = user_google_info.get('name')
-        given_name = user_google_info.get('given_name')
-        family_name = user_google_info.get('family_name')
-        profile_pic_url = user_google_info.get('picture')
-
-        if not google_id or not email:
-            print("Auth: Critical information (google_id or email) missing from Google userinfo.")
-            return redirect(f"{current_app.config.get('FRONTEND_URL', 'http://localhost:5173')}/login?error=missing_google_info")
-
-        user = User.query.filter_by(google_id=google_id).first()
-        if user:
-            user.email = email 
-            user.name = name
-            user.given_name = given_name
-            user.family_name = family_name
-            user.profile_pic_url = profile_pic_url
-            user.last_login_at = datetime.utcnow()
-            print(f"Auth: Existing user {user.email} found. Updating last login.")
-        else:
-            user = User(
-                google_id=google_id,
-                email=email,
-                name=name,
-                given_name=given_name,
-                family_name=family_name,
-                profile_pic_url=profile_pic_url
+        credential = data.get('credential')
+        if not credential:
+            return jsonify({'error': 'Google credential is required'}), 400
+        
+        # Verify the Google token with Google's API
+        # This is a simplified example - in production, verify the token with Google
+        # https://developers.google.com/identity/gsi/web/guides/verify-google-id-token
+        
+        # For now, extract user info from the token (in production, verify first)
+        try:
+            # This would be replaced with proper verification
+            import jwt
+            user_info = jwt.decode(credential, options={"verify_signature": False})
+            
+            # Find or create user based on Google ID
+            user = User.query.filter_by(email=user_info['email']).first()
+            
+            if not user:
+                # Create new user
+                user = User(
+                    email=user_info['email'],
+                    name=user_info.get('name', ''),
+                    google_id=user_info.get('sub', ''),
+                    profile_pic_url=user_info.get('picture', ''),
+                    created_at=datetime.now(timezone.utc)
+                )
+                db.session.add(user)
+            else:
+                # Update existing user with Google info
+                user.google_id = user_info.get('sub', '')
+                user.name = user_info.get('name', user.name)
+                user.profile_pic_url = user_info.get('picture', user.profile_pic_url)
+            
+            # Update last login
+            user.last_login_at = datetime.now(timezone.utc)
+            db.session.commit()
+            
+            # Create JWT token
+            token = create_access_token(
+                identity=user.id,
+                additional_claims={
+                    'email': user.email,
+                    'name': user.name,
+                    'google_id': user.google_id
+                }
             )
-            db.session.add(user)
-            print(f"Auth: New user {user.email} created.")
-        
-        db.session.commit() 
-        login_user(user, remember=True) 
-        print(f"Auth: User {user.email} logged in successfully via Google session.")
-        
-        frontend_url = current_app.config.get('FRONTEND_URL', 'http://localhost:5173')
-        return redirect(frontend_url)
-
+            
+            return jsonify({
+                'message': 'Google login successful',
+                'token': token,
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'name': user.name,
+                    'profile_pic_url': user.profile_pic_url
+                }
+            }), 200
+            
+        except Exception as e:
+            print(f"Error processing Google credential: {e}")
+            return jsonify({'error': 'Invalid Google credential'}), 400
+            
     except Exception as e:
-        print(f"Auth: Error during Google OAuth callback processing: {type(e).__name__} - {e}")
-        db.session.rollback() 
-        frontend_url = current_app.config.get('FRONTEND_URL', 'http://localhost:5173')
-        return redirect(f"{frontend_url}/login?error=google_oauth_failed_internal") 
-
-
-@auth_bp.route('/logout', methods=['POST']) 
-@login_required 
-def logout():
-    try:
-        user_email_for_log = current_user.email if current_user.is_authenticated else "Unknown user"
-        logout_user() 
-        print(f"Auth: User {user_email_for_log} logged out successfully.")
-        return jsonify({"message": "Logged out successfully"}), 200
-    except Exception as e:
-        print(f"Auth: Error during logout: {type(e).__name__} - {e}")
-        return jsonify({"error": "Logout failed due to an internal error"}), 500
-
-
-@auth_bp.route('/me', methods=['GET']) 
-@login_required 
-def me():
-    if current_user.is_authenticated:
-        return jsonify({
-            "id": current_user.id, 
-            "google_id": current_user.google_id,
-            "email": current_user.email,
-            "name": current_user.name,
-            "given_name": current_user.given_name,
-            "family_name": current_user.family_name,
-            "profile_pic_url": current_user.profile_pic_url,
-            "is_authenticated": True
-        })
-    else:
-        # The erroneous JavaScript comment was here and has been removed.
-        # This block is typically not reached if @login_required works.
-        return jsonify({"error": "User not authenticated"}), 401 
-
-@auth_bp.route('/hello-auth')
-def hello_auth():
-    return "Hello from the Auth Blueprint! If you see this, blueprint registration worked."
+        print(f"Google login API error: {e}")
+        return jsonify({'error': f'Google login failed: {str(e)}'}), 500

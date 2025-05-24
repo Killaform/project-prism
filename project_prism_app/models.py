@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
 from flask_login import UserMixin
-# Import 'db' from the application factory context in __init__.py
-# This ensures 'db' is the same SQLAlchemy instance initialized with the app
-from . import db # Use a relative import since models.py is in the same package as __init__.py
+from . import db
 
 class User(UserMixin, db.Model):
     """
@@ -14,36 +12,34 @@ class User(UserMixin, db.Model):
     __tablename__ = 'users' # Optional: Explicitly name the table
 
     id = db.Column(db.Integer, primary_key=True) # Primary key for our internal use
-    google_id = db.Column(db.String(120), unique=True, nullable=True) # Google's unique subject identifier
     email = db.Column(db.String(120), unique=True, nullable=False) # User's email, should be verified by Google
-    name = db.Column(db.String(100), nullable=True) # User's full name
-    given_name = db.Column(db.String(100), nullable=True) # First name
-    family_name = db.Column(db.String(100), nullable=True) # Last name
+    password_hash = db.Column(db.String(128), nullable=True)  # Can be null for OAuth users
+    name = db.Column(db.String(100), nullable=False) # User's full name
+    given_name = db.Column(db.String(50), nullable=True) # First name
+    family_name = db.Column(db.String(50), nullable=True) # Last name
     profile_pic_url = db.Column(db.String(255), nullable=True) # URL to profile picture
-    password_hash = db.Column(db.String(128), nullable=True) # Hash of the user's password for authentication
-    created_at = db.Column(db.DateTime, nullable=True, default=lambda: datetime.now(timezone.utc)) # Account creation timestamp
+    google_id = db.Column(db.String(100), unique=True, nullable=True) # Google's unique subject identifier
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc)) # Account creation timestamp
     last_login_at = db.Column(db.DateTime, nullable=True) # Last login timestamp
+    is_active = db.Column(db.Boolean, default=True)
 
     def __repr__(self):
-        return f'<User id={self.id} email={self.email} name={self.name}>'
+        return f'<User {self.email}>'
 
-    # Flask-Login requires a get_id method, UserMixin provides it, 
-    # but it expects the primary key to be 'id'.
-    # If your primary key was named differently, you'd override get_id().
-    # Since our PK is 'id', UserMixin's default get_id() works fine.
-
-class SavedQuery(db.Model):
-    __tablename__ = 'saved_queries'
+class SearchHistory(db.Model):
+    __tablename__ = 'search_history'
     
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    query_text = db.Column(db.String(500), nullable=False)
-    selected_engines = db.Column(db.JSON, nullable=False)
-    perspective = db.Column(db.String(50), nullable=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    query = db.Column(db.String(500), nullable=False)
+    engines_used = db.Column(db.String(200), nullable=True)  # JSON string of engines
+    results_count = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     
+    user = db.relationship('User', backref=db.backref('searches', lazy=True))
+
     def __repr__(self):
-        return f"<SavedQuery '{self.query_text[:30]}...' by User ID {self.user_id}>"
+        return f'<SearchHistory {self.query[:30]}...>'
 
 # class UserApiSetting(db.Model): # If we store user-specific API keys in the DB (use with caution, encrypt sensitive keys)
 #     id = db.Column(db.Integer, primary_key=True)
