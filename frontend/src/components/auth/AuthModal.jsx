@@ -26,7 +26,7 @@ const AuthModal = ({
             <div className="bg-white p-6 sm:p-8 shadow-xl rounded-lg w-full max-w-md">
                 <div className="flex justify-between items-center mb-6">
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center uppercase tracking-wide">
-                        <span className="mr-2 text-gray-900">></span>
+                        <span className="mr-2 text-gray-900">&gt;</span>
                         {authMode === 'login' ? 'SYSTEM ACCESS' : 'NEW USER CREATION'}
                     </h2>
                     <button onClick={onClose} className="text-gray-900 hover:text-purple-700">

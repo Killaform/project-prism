@@ -1,0 +1,9 @@
+Fix for JSX error in AuthModal.jsx:
+
+Change line 29 from:
+<span className="mr-2 text-gray-900">></span>
+
+To:
+<span className="mr-2 text-gray-900">&gt;</span>
+
+This replaces the ">" character with its HTML entity "&gt;" which is safe to use in JSX.
