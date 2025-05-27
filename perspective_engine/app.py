@@ -2,6 +2,7 @@ from flask import Flask, request, session, url_for, jsonify
 from perspective_engine.api import setup_api
 from perspective_engine.config.constants import DEFAULT_PORT, DEFAULT_HOST
 import os
+from flask_cors import CORS
 
 def create_app():
     """Create and configure the Flask application"""
@@ -21,19 +22,17 @@ def create_app():
     migrate.init_app(app, db)
     jwt.init_app(app)
     
-    # Configure CORS - Fix CORS issues
-    from flask_cors import CORS
-    CORS(app, 
-         origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
-         supports_credentials=True,
-         methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-         allow_headers=['Content-Type', 'Authorization'],
-         expose_headers=['Content-Type', 'Authorization'])
+    # Configure CORS - allow requests from frontend
+    CORS(app, origins=["http://localhost:5173", "http://localhost:5174"], 
+         supports_credentials=True, 
+         allow_headers=["Content-Type", "Authorization"],
+         methods=["GET", "POST", "OPTIONS"])
     
     # Add CORS headers to all responses
     @app.after_request
     def after_request(response):
         response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5173')
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5174')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
         response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
         response.headers.add('Access-Control-Allow-Credentials', 'true')

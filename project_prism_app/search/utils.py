@@ -5,6 +5,10 @@ import requests
 from bs4 import BeautifulSoup
 import google.generativeai as genai
 from openai import OpenAI
+from urllib.parse import urlparse
+from serpapi import GoogleSearch as SerpApiClient
+from flask import jsonify
+import ast
 
 # Domain lists can stay here or be moved to a shared constants file later
 KNOWN_SOCIAL_MEDIA_PLATFORMS = [ "x.com", "twitter.com", "instagram.com", "tiktok.com", "youtube.com", "youtu.be", "facebook.com", "reddit.com", "linkedin.com", "pinterest.com", "tumblr.com", "medium.com", "quora.com", "threads.net" ]
@@ -221,3 +225,61 @@ def calculate_intrinsic_score(data):
     # ... (Paste the exact intrinsic score calculation logic from the last working /score endpoint here)
     if not data: return jsonify({"error": "Invalid JSON payload for score util"}), 400
     s_type=data.get('source_type','unknown').lower();b_trust=float(data.get('base_trust',50));r_boost=float(data.get('recency_boost',0));fc_v=data.get('factcheckVerdict','pending').lower();BTS_MAX=60;RMS_MAX=15;FCS_MAX=20;ITA_MAX=10;bts=min(max(b_trust/100*BTS_MAX,0),BTS_MAX);rs=min(max(r_boost/100*RMS_MAX,0),RMS_MAX);fcs_map={"verified":FCS_MAX,"neutral":0,"disputed":-FCS_MAX,"disputed_false":-FCS_MAX,"pending":-2,"lacks_consensus":-int(FCS_MAX*.4),"needs_context":0,"needs_context_format_error":0,"needs_context_ast_eval":0,"needs_context_fallback":0,"service_unavailable":0,"unverifiable":-int(FCS_MAX*.6),"error_parsing":-5,"neutral_unavailable":0,"neutral_parsing_error":0,"neutral_error":0,"error":-5};fcs=fcs_map.get(fc_v,0);itq_map={"government":.8,"academic_institution":.9,"research_publication":.9,"encyclopedia":.7,"news_media_mainstream":.6,"news_opinion_blog_live":.3,"ngo_nonprofit_publication":.5,"ngo_nonprofit_organization":.4,"ngo_nonprofit_general":.2,"corporate_blog_pr_info":.1,"news_media_other_or_blog":-.3,"social_media_platform":-.8,"social_media_platform_video":-.7,"social_media_channel_creator":-.5,"social_blogging_platform_user_pub":-.4,"social_blogging_platform":-.6,"website_general":0,"unknown_url":-.9,"unknown_other":-.9,"unknown_error_parsing":-1,"mainstream":.6,"alternative":-.4,"unknown":-.7};tqv=itq_map.get(s_type,0.);ita=tqv*ITA_MAX;tis=bts+rs+fcs+ita;fs=int(round(min(max(tis,0),100)));return jsonify({"intrinsic_credibility_score":fs,"factors":{"base_trust_contribution":round(bts,2),"recency_contribution":round(rs,2),"fact_check_contribution":round(fcs,2),"type_quality_adjustment":round(ita,2)}})
+
+def infer_perspective_from_url_and_title(url, title):
+    """Simple rule-based classifier for perspective"""
+    url = url.lower() if url else ''
+    title = title.lower() if title else ''
+    
+    # Government, educational, or major health organizations
+    if any(domain in url for domain in ['.gov', '.edu', 'who.int', 'cdc.gov', 'nih.gov', '.un.org']):
+        return 'mainstream'
+    
+    # Major news outlets
+    mainstream_news_domains = [
+        'bbc.', 'cnn.', 'nytimes.', 'washingtonpost.', 'reuters.', 'apnews.', 
+        'nbcnews.', 'abcnews.', 'cbsnews.', 'theguardian.', 'wsj.', 'economist.',
+        'npr.org', 'pbs.org', 'usatoday.', 'bloomberg.', 'forbes.', 'politico.', 'axios.'
+    ]
+    if any(outlet in url for outlet in mainstream_news_domains):
+        return 'mainstream'
+    
+    # Reference sites
+    if 'wikipedia.org' in url or 'britannica.com' in url or 'snopes.com' in url or 'factcheck.org' in url:
+        return 'neutral'
+    
+    # Alternative keywords
+    alternative_keywords = [
+        'conspiracy', 'truth', 'alternative', 'freedom', 'patriot', 'liberty', 
+        'globalist', 'deep state', 'awakening', 'coverup', 'hoax', 'exposed'
+    ]
+    if any(term in url or term in title for term in alternative_keywords):
+        return 'alternative'
+    
+    # Academic journals
+    academic_journal_domains = [
+        'nature.com', 'science.org', 'nejm.org', 'bmj.com', 'thelancet.com',
+        'cell.com', 'pubmed', 'sciencedirect', 'springer', 'wiley', 'oxfordjournals.org',
+        'jamanetwork.com', 'arxiv.org', 'plos.org', 'frontiersin.org'
+    ]
+    if any(term in url for term in academic_journal_domains):
+        if not any(alt_kw in title for alt_kw in ['controversial', 'disputed', 'alternative view']):
+             return 'mainstream'
+    
+    # Alternative title phrases
+    alternative_title_phrases = [
+        'what they aren\'t telling you', 'the truth about', 'what doctors won\'t say',
+        'doctors are silent', 'big-pharma agenda', 'media won\'t show you',
+        'the untold story of', 'hidden agenda', 'the great awakening', 'red pill'
+    ]
+    if any(phrase in title for phrase in alternative_title_phrases):
+        return 'alternative'
+    
+    # Mainstream patterns
+    import re
+    if re.search(r'official|report|study|research|analysis|guidelines|statement from|university study|government report', 
+                title, re.I) and not any(alt_kw in title for alt_kw in alternative_keywords + alternative_title_phrases):
+        return 'mainstream'
+    
+    # Default
+    return 'neutral'

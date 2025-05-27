@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from flask_login import UserMixin
 from . import db
+from sqlalchemy import Column, String, Integer
 
 class User(UserMixin, db.Model):
     """
@@ -40,6 +41,17 @@ class SearchHistory(db.Model):
 
     def __repr__(self):
         return f'<SearchHistory {self.query[:30]}...>'
+
+class APIKey(db.Model):
+    __tablename__ = 'api_keys'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    key = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+
+    def __repr__(self):
+        return f"<APIKey(name={self.name}, key=HIDDEN)>"
 
 # class UserApiSetting(db.Model): # If we store user-specific API keys in the DB (use with caution, encrypt sensitive keys)
 #     id = db.Column(db.Integer, primary_key=True)

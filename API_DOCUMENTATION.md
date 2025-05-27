@@ -41,4 +41,26 @@ This document provides details about the APIs exposed by Project Prism.
   }
   ```
 
+## Perspective Classification API
+
+### Endpoint: `/api/perspective`
+- **Method**: POST
+- **Description**: Classifies the perspective of a given URL and title.
+- **Request Body**:
+  ```json
+  {
+    "url": "string",
+    "title": "string"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "perspective": "string"
+  }
+  ```
+
+### Notes
+- The `perspective` field can have values like `mainstream`, `neutral`, or `alternative` based on the classification logic.
+
 Refer to the codebase for additional endpoints.

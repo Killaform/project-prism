@@ -43,11 +43,16 @@ jwt = JWTManager(app) # Initialize JWTManager
 # --- BEGIN GOOGLE OAUTH CONFIGURATION ---
 oauth = OAuth(app)
 oauth.register(
-    name="google",
-    client_id=os.getenv("GOOGLE_CLIENT_ID"),
-    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-    client_kwargs={"scope": "openid email profile"},
+    name='google',
+    client_id=os.getenv('GOOGLE_CLIENT_ID'),
+    client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
+    access_token_url='https://oauth2.googleapis.com/token',
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+    api_base_url='https://www.googleapis.com/oauth2/v1/',
+    client_kwargs={
+        'scope': 'openid email profile',
+        'prompt': 'consent'
+    }
 )
 # --- END GOOGLE OAUTH CONFIGURATION ---
 
