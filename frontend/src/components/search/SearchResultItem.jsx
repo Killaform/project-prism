@@ -92,7 +92,27 @@ const SearchResultItem = ({
                         <h3 className="text-gray-900 text-lg font-semibold mb-1">
                             {result.title}
                         </h3>
-                    </div>
+                    
+                        {result.source_credibility && (
+                            <div className="mt-1">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium credibility-badge
+                                    ${result.source_credibility === 'high' ? 'bg-green-100 text-green-800' : 
+                                      result.source_credibility === 'medium' ? 'bg-blue-100 text-blue-800' :
+                                      result.source_credibility === 'low' ? 'bg-orange-100 text-orange-800' :
+                                      'bg-gray-100 text-gray-800'}`}
+                                >
+                                    {result.source_credibility === 'high' ? 'High Credibility' : 
+                                     result.source_credibility === 'medium' ? 'Medium Credibility' :
+                                     result.source_credibility === 'low' ? 'Low Credibility' : 
+                                     'Unknown Credibility'}
+                                </span>
+                                {result.intrinsic_credibility_score && (
+                                    <span className="ml-2 text-xs text-gray-500">
+                                        Score: {result.intrinsic_credibility_score}/100
+                                    </span>
+                                )}
+                            </div>
+                        )}</div>
                 </div>
                 
                 {/* Link styling */}
